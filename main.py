@@ -12,6 +12,7 @@ import asyncio
 
 # 🔑 ENV
 TOKEN = os.environ.get("TOKEN")
+WEATHER_API_KEY = "5102dbcdeb96dddb822639d35fa993c4"
 CHANNEL_ID = "@IslandXTenerife"
 
 # 🌐 KEEP ALIVE
@@ -73,7 +74,7 @@ def normalize_text(text):
     text = text.replace("-", " ").replace("_", " ")
     return text
 
-# 🌊 CACHE GLOBAL
+# 🌤️ CACHE
 WEATHER_CACHE = {}
 CACHE_TIME = 600  # 10 minutos
 LAST_UPDATE = 0
@@ -83,7 +84,9 @@ def update_cache():
     new_cache = {}
     for z in ZONES:
         try:
-            url = f"https://api.open-meteo.com/v1/forecast?latitude={ZONES[z]['lat']}&longitude={ZONES[z]['lon']}&hourly=temperature_2m,windspeed_10m,wave_height&timezone=auto"
+            lat = ZONES[z]["lat"]
+            lon = ZONES[z]["lon"]
+            url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric"
             data = requests.get(url, timeout=5).json()
             new_cache[z] = data
         except Exception as e:
@@ -92,25 +95,24 @@ def update_cache():
     LAST_UPDATE = time.time()
     print("🟢 Cache updated")
 
-def get_zone_info(zone_key, hour_index=0):
+def get_zone_info(zone_key):
     data = WEATHER_CACHE.get(zone_key)
     if not data:
         return None
-    temp = data['hourly']['temperature_2m'][hour_index]
-    wind = data['hourly']['windspeed_10m'][hour_index]
-    wave = data['hourly']['wave_height'][hour_index]
+    temp = data["main"]["temp"]
+    wind = data["wind"]["speed"]
+    desc = data["weather"][0]["description"]
     return {
         "zone_key": zone_key,
         "zone": ZONES[zone_key]["name"],
         "temp": temp,
         "wind": wind,
-        "wave": wave
+        "desc": desc
     }
 
 # 🏄 ACTIVIDAD
 def get_activity(info):
-    wind = info["wind"]
-    wave = info["wave"]
+    wind = info["wind"] * 3.6  # convertir m/s a km/h
     zone_key = info["zone_key"]
     if zone_key == "teide":
         return "🥾 Senderismo / 🌌 Astrofotografía"
@@ -124,87 +126,28 @@ def get_activity(info):
         return "🏝️ Mar tranquilo"
 
 # 📊 RANKING
-def get_ranking(hour_index=0):
+def get_ranking():
     ranking = []
     for z in ZONES:
-        info = get_zone_info(z, hour_index)
+        info = get_zone_info(z)
         if info:
-            score = info["wind"] * 0.7 + info["wave"] * 3
-            ranking.append({"zone": info["zone"], "score": score, "wind": info["wind"], "wave": info["wave"]})
+            score = info["wind"] * 0.7  # solo viento por ahora
+            ranking.append({"zone": info["zone"], "score": score, "wind": info["wind"]})
     ranking.sort(key=lambda x: x["score"], reverse=True)
     msg = "📊 Ranking condiciones:\n\n"
     for i, r in enumerate(ranking, 1):
-        msg += f"{i}. {r['zone']} → Viento {round(r['wind'],1)} km/h, Oleaje {round(r['wave'],1)} m\n"
+        msg += f"{i}. {r['zone']} → Viento {round(r['wind']*3.6,1)} km/h\n"
     return msg
 
 # 📝 ACTIVIDADES
-def get_activities(hour_index=0):
+def get_activities():
     msg = "🏄 Actividades por zona:\n\n"
     for z in ZONES:
-        info = get_zone_info(z, hour_index)
+        info = get_zone_info(z)
         if info:
             activity = get_activity(info)
             msg += f"📍 {info['zone']} → {activity}\n"
     return msg
-
-# 🧠 USUARIO
-def get_user(user_id):
-    return USER_DATA.get(str(user_id), {})
-
-def update_user(user_id, key, value):
-    user_id = str(user_id)
-    if user_id not in USER_DATA:
-        USER_DATA[user_id] = {}
-    USER_DATA[user_id][key] = value
-    save_users(USER_DATA)
-
-def get_lang(update):
-    user_id = update.effective_user.id
-    lang = (update.effective_user.language_code or "es")[:2]
-    update_user(user_id, "lang", lang)
-    return lang
-
-# 💬 MENSAJES
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = normalize_text(update.message.text)
-    user_id = update.effective_user.id
-    lang = get_lang(update)
-
-    # Clima por zona
-    zone_key = ZONE_MAPPING.get(text)
-    if zone_key:
-        info = get_zone_info(zone_key)
-        if info:
-            msg = f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {info['wind']} km/h\n🌊 {info['wave']} m\n👉 {get_activity(info)}"
-            await update.message.reply_text(msg)
-        else:
-            await update.message.reply_text("❌ No hay datos disponibles para esta zona.")
-        return
-
-    # Ranking
-    if "ranking" in text:
-        await update.message.reply_text(get_ranking())
-        return
-
-    # Actividades
-    if "actividad" in text or "actividades" in text:
-        await update.message.reply_text(get_activities())
-        return
-
-    # Saludo
-    if "hola" in text or "hi" in text:
-        welcome_msg = (
-            "👋 ¡Bienvenido! Soy Calimabot, tu asistente del clima en Tenerife.\n\n"
-            "📍 Puedes pedirme:\n"
-            "- Clima en una zona: ej. 'El Médano'\n"
-            "- Ranking de condiciones: escribe 'ranking'\n"
-            "- Actividades recomendadas: escribe 'actividades'\n"
-            "- Mejor spot ahora: usa /bestspot\n"
-        )
-        await update.message.reply_text(welcome_msg)
-        return
-
-    await update.message.reply_text("🤖 No entendí tu mensaje. Prueba: clima en <zona>, ranking, actividades, bestspot")
 
 # 🚀 START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,15 +169,34 @@ async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = get_zone_info(z)
         if not info:
             continue
-        score = info["wind"] * 0.7 + info["wave"] * 3
+        score = info["wind"]
         if score > best_score:
             best_score = score
             best = info
     if best:
-        msg = f"🔥 Mejor spot ahora:\n📍 {best['zone']}\n🌡️ {best['temp']}°C\n🌬️ {best['wind']} km/h\n🌊 {best['wave']} m\n👉 {get_activity(best)}"
+        msg = f"🔥 Mejor spot ahora:\n📍 {best['zone']}\n🌡️ {best['temp']}°C\n🌬️ {round(best['wind']*3.6,1)} km/h\n☁️ {best['desc']}\n👉 {get_activity(best)}"
         await update.message.reply_text(msg)
     else:
         await update.message.reply_text("No hay datos disponibles")
+
+# 💬 MENSAJES
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = normalize_text(update.message.text)
+
+    if text in ZONE_MAPPING:
+        zone_key = ZONE_MAPPING[text]
+        info = get_zone_info(zone_key)
+        if info:
+            msg = f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {round(info['wind']*3.6,1)} km/h\n☁️ {info['desc']}\n👉 {get_activity(info)}"
+            await update.message.reply_text(msg)
+        else:
+            await update.message.reply_text("❌ No hay datos disponibles para esta zona.")
+    elif "ranking" in text:
+        await update.message.reply_text(get_ranking())
+    elif "actividad" in text or "actividades" in text:
+        await update.message.reply_text(get_activities())
+    else:
+        await update.message.reply_text("🤖 No entendí tu mensaje. Prueba: clima en <zona>, ranking, actividades, bestspot")
 
 # 📡 AUTO-POST
 async def send_post(app):
@@ -242,23 +204,21 @@ async def send_post(app):
     for z in ZONES:
         info = get_zone_info(z)
         if info:
-            message += f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {info['wind']} km/h\n🌊 {info['wave']} m\n👉 {get_activity(info)}\n\n"
+            message += f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {round(info['wind']*3.6,1)} km/h\n☁️ {info['desc']}\n👉 {get_activity(info)}\n\n"
     await app.bot.send_message(chat_id=CHANNEL_ID, text=message)
 
 # 🔧 MAIN
 def main():
-    update_cache()  # primera carga
+    update_cache()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("bestspot", bestspot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     scheduler = BackgroundScheduler()
-    # Actualización de cache cada 10 minutos
     scheduler.add_job(update_cache, "interval", minutes=10)
-    # Mensajes automáticos
     for h in [7,10,14,17]:
-        scheduler.add_job(lambda: asyncio.run(send_post(app)), "cron", hour=h, minute=0)
+        scheduler.add_job(lambda: asyncio.create_task(send_post(app)), "cron", hour=h, minute=0)
     scheduler.start()
 
     print("🚀 Bot running...")
