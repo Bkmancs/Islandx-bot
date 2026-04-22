@@ -5,112 +5,102 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# 🔑 VARIABLES DE ENTORNO (RENDER)
+# 🔑 ENV
 TOKEN = os.environ.get("TOKEN")
 WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY")
 
-# 📡 CANAL
 CHANNEL_ID = "@IslandXTenerife"
 
 
-# 🌍 TRADUCCIONES
-TEXTS = {
-    "es": {
-        "weather": "🌤️ Clima en Tenerife",
-        "activities": "🏄 Actividades en Tenerife",
-        "update": "🌴 Actualización IslandX Tenerife"
-    },
-    "en": {
-        "weather": "🌤️ Tenerife Weather",
-        "activities": "🏄 Tenerife Activities",
-        "update": "🌴 IslandX Tenerife Update"
-    },
-    "fr": {
-        "weather": "🌤️ Météo à Tenerife",
-        "activities": "🏄 Activités à Tenerife",
-        "update": "🌴 Mise à jour IslandX Tenerife"
-    },
-    "de": {
-        "weather": "🌤️ Wetter in Teneriffa",
-        "activities": "🏄 Aktivitäten auf Teneriffa",
-        "update": "🌴 IslandX Teneriffa Update"
-    },
-    "nl": {
-        "weather": "🌤️ Weer op Tenerife",
-        "activities": "🏄 Activiteiten op Tenerife",
-        "update": "🌴 IslandX Tenerife Update"
-    }
+# 🌍 SPOTS EN TENERIFE SUR
+SPOTS = {
+    "medano": "🌬️ El Médano → Kitesurf / Windsurf",
+    "palm_mar": "🏝️ Palm-Mar → Paddle / Snorkel",
+    "los_cristianos": "🌊 Los Cristianos → Kayak / Surf suave",
+    "las_americas": "🏄 Las Américas → Surf / Wind variable",
+    "adeje": "🪂 Costa Adeje → Parapente"
 }
 
 
-# 🌍 CLIMA
-def get_weather_by_coords(lat, lon):
-    url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric"
+# 🌤️ CLIMA
+def get_weather():
+    url = f"http://api.openweathermap.org/data/2.5/weather?lat=28.2916&lon=-16.6291&appid={WEATHER_API_KEY}&units=metric"
     return requests.get(url).json()
 
 
-# 🌤️ WEATHER (ES por defecto)
+# 🧠 DECISIÓN INTELIGENTE DE SPOT
+def get_best_spot(wind):
+    if wind >= 7:
+        return SPOTS["medano"]
+    elif 4 <= wind < 7:
+        return SPOTS["las_americas"]
+    elif 2 <= wind < 4:
+        return SPOTS["los_cristianos"]
+    else:
+        return SPOTS["palm_mar"]
+
+
+# 🌍 IDIOMA AUTOMÁTICO
+def get_lang(update: Update):
+    lang = update.effective_user.language_code
+    return lang[:2] if lang else "es"
+
+
+# 🌤️ WEATHER INTELIGENTE
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = "es"
-
-    data = get_weather_by_coords(28.2916, -16.6291)
+    data = get_weather()
 
     temp = data["main"]["temp"]
     wind = data["wind"]["speed"]
     desc = data["weather"][0]["description"]
 
-    message = f"""
-{TEXTS[lang]["weather"]}
+    spot = get_best_spot(wind)
+
+    lang = get_lang(update)
+
+    messages = {
+        "es": f"""
+🌤️ Clima Tenerife
 
 🌡️ {temp}°C
 🌬️ {wind} m/s
 ☁️ {desc}
-"""
 
-    await update.message.reply_text(message)
-
-
-# 🌤️ WEATHER EN
-async def weather_en(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_weather_by_coords(28.2916, -16.6291)
-
-    temp = data["main"]["temp"]
-    wind = data["wind"]["speed"]
-    desc = data["weather"][0]["description"]
-
-    message = f"""
-{TEXTS["en"]["weather"]}
+🏄 Recomendación:
+{spot}
+""",
+        "en": f"""
+🌤️ Tenerife Weather
 
 🌡️ {temp}°C
 🌬️ {wind} m/s
 ☁️ {desc}
+
+🏄 Recommended spot:
+{spot}
 """
+    }
 
-    await update.message.reply_text(message)
-
-
-# 🏄 ACTIVITIES
-async def activities(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = """
-🏄 Tenerife Activities
-
-🌬️ El Médano → Kite / Windsurf
-🌊 Los Cristianos → Kayak
-🏝️ Palm-Mar → Snorkel / Paddle
-🏄 Las Américas → Surf
-🪂 Costa Adeje → Paragliding
-"""
-    await update.message.reply_text(message)
+    await update.message.reply_text(messages.get(lang, messages["es"]))
 
 
-# 📡 POST AUTOMÁTICO (STABLE VERSION)
-def send_weather_post_sync(app):
+# 👋 START
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 IslandX Smart Assistant\n\nUse /weather"
+    )
+
+
+# 📡 AUTO POST CANAL
+def send_post(app):
     async def send():
-        data = get_weather_by_coords(28.2916, -16.6291)
+        data = get_weather()
 
         temp = data["main"]["temp"]
         wind = data["wind"]["speed"]
         desc = data["weather"][0]["description"]
+
+        spot = get_best_spot(wind)
 
         message = f"""
 🌴 IslandX Tenerife Update
@@ -119,11 +109,7 @@ def send_weather_post_sync(app):
 🌬️ {wind} m/s
 ☁️ {desc}
 
-🏄 El Médano → Kite / Windsurf
-🌊 Los Cristianos → Kayak
-🏝️ Palm-Mar → Calm water
-🏄 Las Américas → Surf
-🪂 Costa Adeje → Paragliding
+🏄 {spot}
 """
 
         await app.bot.send_message(chat_id=CHANNEL_ID, text=message)
@@ -131,33 +117,20 @@ def send_weather_post_sync(app):
     asyncio.run(send())
 
 
-# 👋 START
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 IslandX Bot ready!\n/weather\n/weather_en\n/activities"
-    )
-
-
 # 🔧 MAIN
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # HANDLERS
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("weather", weather))
-    app.add_handler(CommandHandler("weather_en", weather_en))
-    app.add_handler(CommandHandler("activities", activities))
 
-    # ⏰ SCHEDULER
     scheduler = BackgroundScheduler()
-
-    scheduler.add_job(send_weather_post_sync, "cron", hour=8, minute=0, args=[app])
-    scheduler.add_job(send_weather_post_sync, "cron", hour=10, minute=0, args=[app])
-    scheduler.add_job(send_weather_post_sync, "cron", hour=14, minute=0, args=[app])
-
+    scheduler.add_job(send_post, "cron", hour=8, minute=0, args=[app])
+    scheduler.add_job(send_post, "cron", hour=10, minute=0, args=[app])
+    scheduler.add_job(send_post, "cron", hour=14, minute=0, args=[app])
     scheduler.start()
 
-    print("Bot running...")
+    print("Smart bot running...")
     app.run_polling()
 
 
