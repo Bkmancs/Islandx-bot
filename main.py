@@ -2,9 +2,10 @@ import os
 import requests
 import asyncio
 import threading
+import time
 from flask import Flask
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # 🔑 ENV
@@ -37,60 +38,58 @@ ZONES = {
 }
 
 
-# 🧠 NORMALIZAR TEXTO USUARIO
-def normalize_zone(text):
-    text = text.lower().replace("_", " ").strip()
-
-    mapping = {
-        "medano": "medano",
-        "el medano": "medano",
-
-        "palm mar": "palm_mar",
-        "palm-mar": "palm_mar",
-
-        "los cristianos": "los_cristianos",
-
-        "las americas": "las_americas",
-        "americas": "las_americas",
-
-        "adeje": "adeje",
-
-        "teide": "teide"
-    }
-
-    return mapping.get(text, None)
+# 🧠 CACHE (reduce API calls)
+CACHE = {}
+CACHE_TIME = 600  # 10 min
 
 
-# 🌤️ CLIMA
 def get_weather_zone(zone_key):
-    z = ZONES[zone_key]
-    url = f"http://api.openweathermap.org/data/2.5/weather?lat={z['lat']}&lon={z['lon']}&appid={WEATHER_API_KEY}&units=metric"
-    return requests.get(url).json()
+    try:
+        z = ZONES[zone_key]
+        url = f"http://api.openweathermap.org/data/2.5/weather?lat={z['lat']}&lon={z['lon']}&appid={WEATHER_API_KEY}&units=metric"
+        res = requests.get(url, timeout=5)
+        res.raise_for_status()
+        return res.json()
+    except:
+        return None
 
 
-# 🏄 ACTIVIDAD INTELIGENTE
+def get_cached_weather(zone_key):
+    now = time.time()
+
+    if zone_key in CACHE:
+        data, ts = CACHE[zone_key]
+        if now - ts < CACHE_TIME:
+            return data
+
+    data = get_weather_zone(zone_key)
+    CACHE[zone_key] = (data, now)
+    return data
+
+
+# 🏄 ACTIVIDAD
 def get_activity(wind, zone_name, zone_key):
     wind_kmh = wind * 3.6
 
     if zone_key == "teide":
-        if wind_kmh > 30:
-            return "🌬️ Condiciones ventosas, precaución en senderos"
-        else:
-            return "🥾 Senderismo recomendado / 🌌 Astrofotografía nocturna"
+        return "🥾 Senderismo / 🌌 Astrofotografía" if wind_kmh < 30 else "🌬️ Mucho viento"
 
     if wind_kmh >= 25:
         return f"🌬️ Kitesurf perfecto en {zone_name}"
     elif 15 <= wind_kmh < 25:
-        return f"🏄 Buenas condiciones de surf en {zone_name}"
+        return f"🏄 Surf bueno en {zone_name}"
     elif 8 <= wind_kmh < 15:
-        return f"🌊 Ideal para kayak/paddle en {zone_name}"
+        return f"🌊 Paddle / kayak en {zone_name}"
     else:
         return f"🏝️ Mar tranquilo en {zone_name}"
 
 
-# 📍 INFO COMPLETA
+# 📍 INFO
 def get_zone_full_info(zone_key):
-    data = get_weather_zone(zone_key)
+    data = get_cached_weather(zone_key)
+
+    if not data:
+        return "⚠️ Error obteniendo datos"
 
     temp = data["main"]["temp"]
     wind = data["wind"]["speed"]
@@ -98,129 +97,160 @@ def get_zone_full_info(zone_key):
 
     zone_name = ZONES[zone_key]["name"]
     activity = get_activity(wind, zone_name, zone_key)
-
-    wind_kmh = round(wind * 3.6, 1)
 
     return f"""
 📍 {zone_name}
 
 🌡️ {temp}°C
-🌬️ {wind_kmh} km/h
+🌬️ {round(wind*3.6,1)} km/h
 ☁️ {desc}
 
 👉 {activity}
 """
 
 
-# 🌤️ /weather
-async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 🧠 NORMALIZAR ZONAS
+def normalize_zone(text):
+    text = text.lower()
 
-    if len(context.args) == 0:
-        await update.message.reply_text("📍 Ejemplo: /weather los cristianos")
+    if "medano" in text:
+        return "medano"
+    if "palm" in text:
+        return "palm_mar"
+    if "cristianos" in text:
+        return "los_cristianos"
+    if "americas" in text:
+        return "las_americas"
+    if "adeje" in text:
+        return "adeje"
+    if "teide" in text:
+        return "teide"
+
+    return None
+
+
+# 🌍 START MULTI-IDIOMA
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    lang = (update.effective_user.language_code or "").lower()
+
+    if lang.startswith("es"):
+        msg = "🌴 IslandX Alerts\nTu asistente en Tenerife\nEscribe normal 😉"
+
+    elif lang.startswith("en"):
+        msg = "🌴 IslandX Alerts\nYour Tenerife assistant\nJust type 😉"
+
+    elif lang.startswith("de"):
+        msg = "🌴 IslandX Alerts\nDein Teneriffa-Assistent\nEinfach schreiben 😉"
+
+    elif lang.startswith("fr"):
+        msg = "🌴 IslandX Alerts\nTon assistant à Tenerife\nÉcris 😉"
+
+    else:
+        msg = "🌍 IslandX ready. Type anything 😉"
+
+    await update.message.reply_text(msg)
+
+
+# 💬 CHAT INTELIGENTE
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    text = update.message.text.lower()
+    lang = (update.effective_user.language_code or "en").lower()
+
+    zone_key = normalize_zone(text)
+
+    # 🌍 zona
+    if zone_key:
+        await update.message.reply_text(get_zone_full_info(zone_key))
         return
 
-    zone_input = " ".join(context.args)
-    zone_key = normalize_zone(zone_input)
+    # 🔥 mejor spot
+    if any(x in text for x in ["mejor", "best", "spot", "donde"]):
 
-    if not zone_key:
-        await update.message.reply_text("❌ Zona no reconocida. Usa /help")
+        best_zone = None
+        best_score = -1
+        best_data = None
+
+        for key in ZONES:
+            data = get_cached_weather(key)
+            if not data:
+                continue
+
+            wind = data["wind"]["speed"]
+
+            if wind > best_score:
+                best_score = wind
+                best_zone = key
+                best_data = data
+
+        if not best_zone:
+            await update.message.reply_text("⚠️ No data available")
+            return
+
+        await update.message.reply_text("🔥 BEST SPOT\n\n" + get_zone_full_info(best_zone))
         return
 
-    data = get_weather_zone(zone_key)
+    # 🌊 actividades
+    if any(x in text for x in ["actividades", "que hacer", "planes"]):
 
-    temp = data["main"]["temp"]
-    wind = data["wind"]["speed"]
-    desc = data["weather"][0]["description"]
+        msg = "🏄 IslandX Live\n"
+        for z in ZONES:
+            msg += "\n" + get_zone_full_info(z)
 
-    zone_name = ZONES[zone_key]["name"]
-    activity = get_activity(wind, zone_name, zone_key)
+        await update.message.reply_text(msg)
+        return
 
-    wind_kmh = round(wind * 3.6, 1)
+    # 👋 saludo
+    if any(x in text for x in ["hola", "hi", "hello"]):
 
-    message = f"""
-🌍 {zone_name}
+        replies = {
+            "es": "👋 Hola! Pregúntame por clima o spots",
+            "en": "👋 Hi! Ask me about weather or spots",
+            "de": "👋 Hallo! Frag nach Wetter",
+            "fr": "👋 Salut! Demande météo"
+        }
 
-🌡️ {temp}°C
-🌬️ {wind_kmh} km/h
-☁️ {desc}
+        await update.message.reply_text(replies.get(lang[:2], "👋 Hello!"))
+        return
 
-👉 {activity}
-"""
-
-    await update.message.reply_text(message)
-
-
-# 🏄 /activities
-async def activities(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    message = "🏄 Tenerife Live Conditions\n"
-
-    for z in ZONES:
-        message += "\n" + get_zone_full_info(z) + "\n"
-
-    await update.message.reply_text(message)
+    # ❓ fallback
+    await update.message.reply_text(
+        "🤖 No te entendí.\nPrueba: clima, mejor spot, actividades"
+    )
 
 
-# 🔥 /bestspot
+# 🔥 BEST SPOT (FIX ROBUSTO)
 async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     best_zone = None
     best_score = -1
-    best_data = None
 
     for key in ZONES:
-        data = get_weather_zone(key)
+        data = get_cached_weather(key)
+        if not data:
+            continue
+
         wind = data["wind"]["speed"]
 
         if wind > best_score:
             best_score = wind
             best_zone = key
-            best_data = data
 
-    temp = best_data["main"]["temp"]
-    desc = best_data["weather"][0]["description"]
+    if not best_zone:
+        await update.message.reply_text("⚠️ Error calculando spot")
+        return
 
-    zone_name = ZONES[best_zone]["name"]
-    activity = get_activity(best_score, zone_name, best_zone)
-
-    wind_kmh = round(best_score * 3.6, 1)
-
-    message = f"""
-🔥 BEST SPOT NOW
-
-📍 {zone_name}
-
-🌡️ {temp}°C
-🌬️ {wind_kmh} km/h
-☁️ {desc}
-
-👉 {activity}
-"""
-
-    await update.message.reply_text(message)
+    await update.message.reply_text(get_zone_full_info(best_zone))
 
 
-# 📘 /help
+# 📘 HELP
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📘 IslandX Help\n\n"
-        "/weather <zona>\n"
-        "Ej: /weather los cristianos\n\n"
-        "/activities → Todas las zonas\n"
-        "/bestspot → Mejor spot ahora\n\n"
-        "Zonas: Médano, Palm-Mar, Los Cristianos, Las Américas, Adeje, Teide"
-    )
-
-
-# 👋 /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🌴 IslandX Alerts\n\n"
-        "Tu asistente en Tenerife\n\n"
-        "🌤️ Clima por zona\n"
-        "🏄 Actividades en tiempo real\n"
-        "🔥 Mejor spot del momento\n\n"
-        "Usa /help para comenzar"
+        "• escribe clima en el médano\n"
+        "• mejor spot\n"
+        "• actividades\n"
     )
 
 
@@ -228,19 +258,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def send_post(app):
 
     async def send():
-        data = get_weather_zone("medano")
+        data = get_cached_weather("medano")
+
+        if not data:
+            return
 
         temp = data["main"]["temp"]
         wind = data["wind"]["speed"]
         desc = data["weather"][0]["description"]
 
-        wind_kmh = round(wind * 3.6, 1)
-
         message = f"""
 🌴 IslandX Update
 
 🌡️ {temp}°C
-🌬️ {wind_kmh} km/h
+🌬️ {round(wind*3.6,1)} km/h
 ☁️ {desc}
 """
 
@@ -249,20 +280,20 @@ def send_post(app):
     asyncio.run(send())
 
 
-# 🔧 MAIN
+# 🚀 MAIN
 def main():
 
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("weather", weather))
-    app.add_handler(CommandHandler("activities", activities))
-    app.add_handler(CommandHandler("bestspot", bestspot))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("bestspot", bestspot))
+
+    # 💬 chat libre
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     scheduler = BackgroundScheduler()
     scheduler.add_job(send_post, "cron", hour=7, minute=0, args=[app])
-    scheduler.add_job(send_post, "cron", hour=10, minute=0, args=[app])
     scheduler.add_job(send_post, "cron", hour=14, minute=0, args=[app])
     scheduler.start()
 
