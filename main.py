@@ -3,6 +3,7 @@ import json
 import time
 import threading
 import requests
+import unicodedata
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
@@ -10,7 +11,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 # 🔑 ENV
 TOKEN = os.environ.get("TOKEN")
-
 CHANNEL_ID = "@IslandXTenerife"
 
 # 🌐 KEEP ALIVE
@@ -51,6 +51,27 @@ ZONES = {
     "teide": {"lat": 28.2724, "lon": -16.6425, "name": "Teide 🏔️"}
 }
 
+# 🧠 NORMALIZACIÓN DE ZONAS
+ZONE_MAPPING = {
+    "medano": "medano",
+    "el medano": "medano",
+    "palm mar": "palm_mar",
+    "palm-mar": "palm_mar",
+    "los cristianos": "los_cristianos",
+    "las americas": "las_americas",
+    "las américas": "las_americas",
+    "americas": "las_americas",
+    "adeje": "adeje",
+    "teide": "teide"
+}
+
+def normalize_text(text):
+    text = text.lower().strip()
+    text = ''.join(c for c in unicodedata.normalize('NFD', text)
+                   if unicodedata.category(c) != 'Mn')  # quitar acentos
+    text = text.replace("-", " ").replace("_", " ")
+    return text
+
 # 🧠 CACHE
 CACHE = {}
 CACHE_TIME = 600  # 10 minutos
@@ -62,7 +83,8 @@ def fetch_weather(zone_key):
     try:
         data = requests.get(url, timeout=5).json()
         return data
-    except:
+    except Exception as e:
+        print(f"Error fetching Open-Meteo for {zone_key}: {e}")
         return None
 
 def get_cached_weather(zone_key):
@@ -84,6 +106,7 @@ def get_zone_info(zone_key, hour_index=0):
     wind = data['hourly']['windspeed_10m'][hour_index]
     wave = data['hourly']['wave_height'][hour_index]
     return {
+        "zone_key": zone_key,
         "zone": ZONES[zone_key]["name"],
         "temp": temp,
         "wind": wind,
@@ -91,9 +114,10 @@ def get_zone_info(zone_key, hour_index=0):
     }
 
 # 🏄 ACTIVIDAD
-def get_activity(info, zone_key):
+def get_activity(info):
     wind = info["wind"]
     wave = info["wave"]
+    zone_key = info["zone_key"]
     if zone_key == "teide":
         return "🥾 Senderismo / 🌌 Astrofotografía"
     if wind >= 25:
@@ -119,6 +143,16 @@ def get_ranking(hour_index=0):
         msg += f"{i}. {r['zone']} → Viento {round(r['wind'],1)} km/h, Oleaje {round(r['wave'],1)} m\n"
     return msg
 
+# 📝 ACTIVIDADES
+def get_activities(hour_index=0):
+    msg = "🏄 Actividades por zona:\n\n"
+    for z in ZONES:
+        info = get_zone_info(z, hour_index)
+        if info:
+            activity = get_activity(info)
+            msg += f"📍 {info['zone']} → {activity}\n"
+    return msg
+
 # 🧠 USUARIO
 def get_user(user_id):
     return USER_DATA.get(str(user_id), {})
@@ -142,21 +176,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = get_lang(update)
 
-    zone_key = None
-    for k in ZONES:
-        if k.replace("_"," ") in text or ZONES[k]["name"].split()[0].lower() in text:
-            zone_key = k
-            break
+    # Normalizar
+    zone_input = normalize_text(text)
+    zone_key = ZONE_MAPPING.get(zone_input)
 
     if zone_key:
         info = get_zone_info(zone_key)
-        msg = f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {info['wind']} km/h\n🌊 {info['wave']} m\n👉 {get_activity(info, zone_key)}"
+        msg = f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {info['wind']} km/h\n🌊 {info['wave']} m\n👉 {get_activity(info)}"
         await update.message.reply_text(msg)
         update_user(user_id, "favorite_zone", zone_key)
         return
 
     if "ranking" in text:
-        await update_message(update, get_ranking())
+        await update.message.reply_text(get_ranking())
+        return
+
+    if "actividad" in text or "actividades" in text:
+        await update.message.reply_text(get_activities())
         return
 
     if "hola" in text or "hi" in text:
@@ -164,7 +200,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(greetings.get(lang,"👋 Hello"))
         return
 
-    await update.message.reply_text("🤖 Prueba: clima, ranking, actividades, bestspot")
+    await update.message.reply_text("🤖 Prueba: clima en <zona>, ranking, actividades, bestspot")
 
 # 🚀 START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,26 +219,7 @@ async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
             best_score = score
             best = info
     if not best:
-        await update.message.reply_text("⚠️ error")
-        return
-    await update.message.reply_text(f"🔥 BEST SPOT\n📍 {best['zone']}\n🌬️ {round(best['wind'],1)} km/h\n🌊 {round(best['wave'],1)} m")
-
-# 📘 HELP
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📘 Comandos:\n- clima en <zona>\n- ranking\n- bestspot")
-
-# 🔧 MAIN
-def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("bestspot", bestspot))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("🚀 Bot running")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+       
 
 if __name__ == "__main__":
     main()
