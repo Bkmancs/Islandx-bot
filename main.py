@@ -8,6 +8,7 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from apscheduler.schedulers.background import BackgroundScheduler
+import asyncio
 
 # 🔑 ENV
 TOKEN = os.environ.get("TOKEN")
@@ -135,7 +136,7 @@ def get_ranking(hour_index=0):
     for z in ZONES:
         info = get_zone_info(z, hour_index)
         if info:
-            score = info["wind"] * 0.7 + info["wave"] * 3  # pondera viento y oleaje
+            score = info["wind"] * 0.7 + info["wave"] * 3
             ranking.append({"zone": info["zone"], "score": score, "wind": info["wind"], "wave": info["wave"]})
     ranking.sort(key=lambda x: x["score"], reverse=True)
     msg = "📊 Ranking condiciones:\n\n"
@@ -176,7 +177,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = get_lang(update)
 
-    # Normalizar
+    # Normalizar zona
     zone_input = normalize_text(text)
     zone_key = ZONE_MAPPING.get(zone_input)
 
@@ -219,7 +220,4 @@ async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
             best_score = score
             best = info
     if not best:
-       
-
-if __name__ == "__main__":
-    main()
+        await update.message.reply_text("No hay datos disponibles")
