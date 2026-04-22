@@ -12,95 +12,130 @@ WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY")
 CHANNEL_ID = "@IslandXTenerife"
 
 
-# 🌍 SPOTS EN TENERIFE SUR
-SPOTS = {
-    "medano": "🌬️ El Médano → Kitesurf / Windsurf",
-    "palm_mar": "🏝️ Palm-Mar → Paddle / Snorkel",
-    "los_cristianos": "🌊 Los Cristianos → Kayak / Surf suave",
-    "las_americas": "🏄 Las Américas → Surf / Wind variable",
-    "adeje": "🪂 Costa Adeje → Parapente"
+# 🌍 ZONAS DE TENERIFE
+ZONES = {
+    "medano": {"lat": 28.0467, "lon": -16.5366, "name": "El Médano 🌬️"},
+    "palm_mar": {"lat": 28.0065, "lon": -16.6805, "name": "Palm-Mar 🏝️"},
+    "los_cristianos": {"lat": 28.0525, "lon": -16.7160, "name": "Los Cristianos 🌊"},
+    "las_americas": {"lat": 28.0619, "lon": -16.7300, "name": "Las Américas 🏄"},
+    "adeje": {"lat": 28.1210, "lon": -16.7260, "name": "Costa Adeje 🪂"},
+    "teide": {"lat": 28.2724, "lon": -16.6425, "name": "Teide 🏔️"}
 }
 
 
-# 🌤️ CLIMA
-def get_weather():
-    url = f"http://api.openweathermap.org/data/2.5/weather?lat=28.2916&lon=-16.6291&appid={WEATHER_API_KEY}&units=metric"
+# 🌤️ CLIMA POR ZONA
+def get_weather_zone(zone):
+    z = ZONES[zone]
+    url = f"http://api.openweathermap.org/data/2.5/weather?lat={z['lat']}&lon={z['lon']}&appid={WEATHER_API_KEY}&units=metric"
     return requests.get(url).json()
 
 
-# 🧠 DECISIÓN INTELIGENTE DE SPOT
-def get_best_spot(wind):
+# 🧠 ACTIVIDADES SEGÚN VIENTO
+def get_activity(wind, zone_name):
     if wind >= 7:
-        return SPOTS["medano"]
+        return f"🌬️ Kitesurf perfecto en {zone_name}"
     elif 4 <= wind < 7:
-        return SPOTS["las_americas"]
+        return f"🏄 Surf recomendado en {zone_name}"
     elif 2 <= wind < 4:
-        return SPOTS["los_cristianos"]
+        return f"🌊 Kayak / Paddle en {zone_name}"
     else:
-        return SPOTS["palm_mar"]
+        return f"🏝️ Agua tranquila en {zone_name}"
 
 
-# 🌍 IDIOMA AUTOMÁTICO
-def get_lang(update: Update):
-    lang = update.effective_user.language_code
-    return lang[:2] if lang else "es"
-
-
-# 🌤️ WEATHER INTELIGENTE
+# 🌤️ /weather ZONA
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_weather()
+
+    if len(context.args) == 0:
+        await update.message.reply_text(
+            "📍 Usa: /weather medano | palm_mar | los_cristianos | las_americas | adeje | teide"
+        )
+        return
+
+    zone_key = context.args[0].lower()
+
+    if zone_key not in ZONES:
+        await update.message.reply_text("❌ Zona no válida")
+        return
+
+    data = get_weather_zone(zone_key)
 
     temp = data["main"]["temp"]
     wind = data["wind"]["speed"]
     desc = data["weather"][0]["description"]
 
-    spot = get_best_spot(wind)
+    zone_name = ZONES[zone_key]["name"]
+    activity = get_activity(wind, zone_name)
 
-    lang = get_lang(update)
-
-    messages = {
-        "es": f"""
-🌤️ Clima Tenerife
+    message = f"""
+🌍 {zone_name}
 
 🌡️ {temp}°C
 🌬️ {wind} m/s
 ☁️ {desc}
 
-🏄 Recomendación:
-{spot}
-""",
-        "en": f"""
-🌤️ Tenerife Weather
-
-🌡️ {temp}°C
-🌬️ {wind} m/s
-☁️ {desc}
-
-🏄 Recommended spot:
-{spot}
+🏄 {activity}
 """
-    }
 
-    await update.message.reply_text(messages.get(lang, messages["es"]))
+    await update.message.reply_text(message)
+
+
+# 🔥 BEST SPOT AUTOMÁTICO
+async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    best_zone = None
+    best_score = -1
+    best_data = None
+
+    for key, z in ZONES.items():
+        url = f"http://api.openweathermap.org/data/2.5/weather?lat={z['lat']}&lon={z['lon']}&appid={WEATHER_API_KEY}&units=metric"
+        data = requests.get(url).json()
+
+        wind = data["wind"]["speed"]
+
+        if wind > best_score:
+            best_score = wind
+            best_zone = key
+            best_data = data
+
+    temp = best_data["main"]["temp"]
+    desc = best_data["weather"][0]["description"]
+
+    zone_name = ZONES[best_zone]["name"]
+    activity = get_activity(best_score, zone_name)
+
+    message = f"""
+🔥 BEST SPOT TODAY
+
+📍 {zone_name}
+
+🌡️ {temp}°C
+🌬️ {best_score} m/s
+☁️ {desc}
+
+👉 {activity}
+"""
+
+    await update.message.reply_text(message)
 
 
 # 👋 START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 IslandX Smart Assistant\n\nUse /weather"
+        "👋 IslandX Smart Assistant\n\n"
+        "📍 /weather medano\n"
+        "🔥 /bestspot"
     )
 
 
-# 📡 AUTO POST CANAL
+# 📡 POST CANAL AUTOMÁTICO
 def send_post(app):
+
     async def send():
-        data = get_weather()
+        data = get_weather_zone("medano")
 
         temp = data["main"]["temp"]
         wind = data["wind"]["speed"]
         desc = data["weather"][0]["description"]
-
-        spot = get_best_spot(wind)
 
         message = f"""
 🌴 IslandX Tenerife Update
@@ -109,7 +144,7 @@ def send_post(app):
 🌬️ {wind} m/s
 ☁️ {desc}
 
-🏄 {spot}
+🏄 Smart recommendation active
 """
 
         await app.bot.send_message(chat_id=CHANNEL_ID, text=message)
@@ -119,20 +154,27 @@ def send_post(app):
 
 # 🔧 MAIN
 def main():
+
     app = Application.builder().token(TOKEN).build()
 
+    # COMMANDS
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("weather", weather))
+    app.add_handler(CommandHandler("bestspot", bestspot))
 
+    # SCHEDULER
     scheduler = BackgroundScheduler()
     scheduler.add_job(send_post, "cron", hour=8, minute=0, args=[app])
     scheduler.add_job(send_post, "cron", hour=10, minute=0, args=[app])
     scheduler.add_job(send_post, "cron", hour=14, minute=0, args=[app])
     scheduler.start()
 
-    print("Smart bot running...")
+    print("🚀 IslandX Smart Bot running...")
     app.run_polling()
 
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
