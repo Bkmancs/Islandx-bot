@@ -69,38 +69,31 @@ ZONE_MAPPING = {
 def normalize_text(text):
     text = text.lower().strip()
     text = ''.join(c for c in unicodedata.normalize('NFD', text)
-                   if unicodedata.category(c) != 'Mn')  # quitar acentos
+                   if unicodedata.category(c) != 'Mn')
     text = text.replace("-", " ").replace("_", " ")
     return text
 
-# 🧠 CACHE
-CACHE = {}
+# 🌊 CACHE GLOBAL
+WEATHER_CACHE = {}
 CACHE_TIME = 600  # 10 minutos
+LAST_UPDATE = 0
 
-# 🌊 FUNCIONES OPEN-METEO
-def fetch_weather(zone_key):
-    z = ZONES[zone_key]
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={z['lat']}&longitude={z['lon']}&hourly=temperature_2m,windspeed_10m,wave_height&timezone=auto"
-    try:
-        data = requests.get(url, timeout=5).json()
-        return data
-    except Exception as e:
-        print(f"Error fetching Open-Meteo for {zone_key}: {e}")
-        return None
+def update_cache():
+    global WEATHER_CACHE, LAST_UPDATE
+    new_cache = {}
+    for z in ZONES:
+        try:
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={ZONES[z]['lat']}&longitude={ZONES[z]['lon']}&hourly=temperature_2m,windspeed_10m,wave_height&timezone=auto"
+            data = requests.get(url, timeout=5).json()
+            new_cache[z] = data
+        except Exception as e:
+            print(f"Error fetching {z}: {e}")
+    WEATHER_CACHE = new_cache
+    LAST_UPDATE = time.time()
+    print("🟢 Cache updated")
 
-def get_cached_weather(zone_key):
-    now = time.time()
-    if zone_key in CACHE:
-        data, ts = CACHE[zone_key]
-        if now - ts < CACHE_TIME:
-            return data
-    data = fetch_weather(zone_key)
-    CACHE[zone_key] = (data, now)
-    return data
-
-# 🌡️ INFO POR ZONA
 def get_zone_info(zone_key, hour_index=0):
-    data = get_cached_weather(zone_key)
+    data = WEATHER_CACHE.get(zone_key)
     if not data:
         return None
     temp = data['hourly']['temperature_2m'][hour_index]
@@ -167,47 +160,63 @@ def update_user(user_id, key, value):
 
 def get_lang(update):
     user_id = update.effective_user.id
-    lang = (update.effective_user.language_code or "en")[:2]
+    lang = (update.effective_user.language_code or "es")[:2]
     update_user(user_id, "lang", lang)
     return lang
 
 # 💬 MENSAJES
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
+    text = normalize_text(update.message.text)
     user_id = update.effective_user.id
     lang = get_lang(update)
 
-    # Normalizar zona
-    zone_input = normalize_text(text)
-    zone_key = ZONE_MAPPING.get(zone_input)
-
+    # Clima por zona
+    zone_key = ZONE_MAPPING.get(text)
     if zone_key:
         info = get_zone_info(zone_key)
-        msg = f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {info['wind']} km/h\n🌊 {info['wave']} m\n👉 {get_activity(info)}"
-        await update.message.reply_text(msg)
-        update_user(user_id, "favorite_zone", zone_key)
+        if info:
+            msg = f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {info['wind']} km/h\n🌊 {info['wave']} m\n👉 {get_activity(info)}"
+            await update.message.reply_text(msg)
+        else:
+            await update.message.reply_text("❌ No hay datos disponibles para esta zona.")
         return
 
+    # Ranking
     if "ranking" in text:
         await update.message.reply_text(get_ranking())
         return
 
+    # Actividades
     if "actividad" in text or "actividades" in text:
         await update.message.reply_text(get_activities())
         return
 
+    # Saludo
     if "hola" in text or "hi" in text:
-        greetings = {"es":"👋 Hola!", "en":"👋 Hi!"}
-        await update.message.reply_text(greetings.get(lang,"👋 Hello"))
+        welcome_msg = (
+            "👋 ¡Bienvenido! Soy Calimabot, tu asistente del clima en Tenerife.\n\n"
+            "📍 Puedes pedirme:\n"
+            "- Clima en una zona: ej. 'El Médano'\n"
+            "- Ranking de condiciones: escribe 'ranking'\n"
+            "- Actividades recomendadas: escribe 'actividades'\n"
+            "- Mejor spot ahora: usa /bestspot\n"
+        )
+        await update.message.reply_text(welcome_msg)
         return
 
-    await update.message.reply_text("🤖 Prueba: clima en <zona>, ranking, actividades, bestspot")
+    await update.message.reply_text("🤖 No entendí tu mensaje. Prueba: clima en <zona>, ranking, actividades, bestspot")
 
 # 🚀 START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(update)
-    msg = {"es":"🌴 IslandX listo","en":"🌴 IslandX ready"}
-    await update.message.reply_text(msg.get(lang,"🌴 Ready"))
+    welcome_msg = (
+        "👋 ¡Bienvenido! Soy Calimabot, tu asistente del clima en Tenerife.\n\n"
+        "📍 Puedes pedirme:\n"
+        "- Clima en una zona: ej. 'El Médano'\n"
+        "- Ranking de condiciones: escribe 'ranking'\n"
+        "- Actividades recomendadas: escribe 'actividades'\n"
+        "- Mejor spot ahora: usa /bestspot\n"
+    )
+    await update.message.reply_text(welcome_msg)
 
 # 🔥 BEST SPOT
 async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,6 +224,8 @@ async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     best_score = -1
     for z in ZONES:
         info = get_zone_info(z)
+        if not info:
+            continue
         score = info["wind"] * 0.7 + info["wave"] * 3
         if score > best_score:
             best_score = score
@@ -236,13 +247,16 @@ async def send_post(app):
 
 # 🔧 MAIN
 def main():
+    update_cache()  # primera carga
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("bestspot", bestspot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Scheduler
     scheduler = BackgroundScheduler()
+    # Actualización de cache cada 10 minutos
+    scheduler.add_job(update_cache, "interval", minutes=10)
+    # Mensajes automáticos
     for h in [7,10,14,17]:
         scheduler.add_job(lambda: asyncio.run(send_post(app)), "cron", hour=h, minute=0)
     scheduler.start()
