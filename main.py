@@ -1,18 +1,17 @@
 import os
 import requests
-import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# 🔑 ENV
+# 🔑 ENV VARIABLES
 TOKEN = os.environ.get("TOKEN")
 WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY")
 
 CHANNEL_ID = "@IslandXTenerife"
 
 
-# 🌍 ZONAS DE TENERIFE
+# 🌍 ZONAS TENERIFE
 ZONES = {
     "medano": {"lat": 28.0467, "lon": -16.5366, "name": "El Médano 🌬️"},
     "palm_mar": {"lat": 28.0065, "lon": -16.6805, "name": "Palm-Mar 🏝️"},
@@ -24,13 +23,13 @@ ZONES = {
 
 
 # 🌤️ CLIMA POR ZONA
-def get_weather_zone(zone):
-    z = ZONES[zone]
+def get_weather_zone(zone_key):
+    z = ZONES[zone_key]
     url = f"http://api.openweathermap.org/data/2.5/weather?lat={z['lat']}&lon={z['lon']}&appid={WEATHER_API_KEY}&units=metric"
     return requests.get(url).json()
 
 
-# 🧠 ACTIVIDADES SEGÚN VIENTO
+# 🧠 ACTIVIDAD SEGÚN VIENTO
 def get_activity(wind, zone_name):
     if wind >= 7:
         return f"🌬️ Kitesurf perfecto en {zone_name}"
@@ -42,7 +41,29 @@ def get_activity(wind, zone_name):
         return f"🏝️ Agua tranquila en {zone_name}"
 
 
-# 🌤️ /weather ZONA
+# 📍 INFO COMPLETA POR ZONA
+def get_zone_full_info(zone_key):
+    data = get_weather_zone(zone_key)
+
+    temp = data["main"]["temp"]
+    wind = data["wind"]["speed"]
+    desc = data["weather"][0]["description"]
+
+    zone_name = ZONES[zone_key]["name"]
+    activity = get_activity(wind, zone_name)
+
+    return f"""
+📍 {zone_name}
+
+🌡️ {temp}°C
+🌬️ {wind} m/s
+☁️ {desc}
+
+👉 {activity}
+"""
+
+
+# 🌤️ WEATHER POR ZONA
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) == 0:
@@ -73,23 +94,41 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🌬️ {wind} m/s
 ☁️ {desc}
 
-🏄 {activity}
+👉 {activity}
 """
 
     await update.message.reply_text(message)
 
 
-# 🔥 BEST SPOT AUTOMÁTICO
+# 🏄 ACTIVITIES CON CLIMA REAL
+async def activities(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    zones = [
+        "medano",
+        "las_americas",
+        "los_cristianos",
+        "palm_mar",
+        "adeje",
+        "teide"
+    ]
+
+    message = "🏄 Tenerife Live Activities & Weather\n"
+
+    for z in zones:
+        message += "\n" + get_zone_full_info(z) + "\n"
+
+    await update.message.reply_text(message)
+
+
+# 🔥 BEST SPOT
 async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     best_zone = None
     best_score = -1
     best_data = None
 
-    for key, z in ZONES.items():
-        url = f"http://api.openweathermap.org/data/2.5/weather?lat={z['lat']}&lon={z['lon']}&appid={WEATHER_API_KEY}&units=metric"
-        data = requests.get(url).json()
-
+    for key in ZONES:
+        data = get_weather_zone(key)
         wind = data["wind"]["speed"]
 
         if wind > best_score:
@@ -121,14 +160,17 @@ async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 👋 START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 IslandX Smart Assistant\n\n"
-        "📍 /weather medano\n"
-        "🔥 /bestspot"
+        "👋 IslandX Smart Bot\n\n"
+        "/weather medano\n"
+        "/activities\n"
+        "/bestspot"
     )
 
 
-# 📡 POST CANAL AUTOMÁTICO
+# 📡 POST CANAL (OPCIONAL)
 def send_post(app):
+
+    import asyncio
 
     async def send():
         data = get_weather_zone("medano")
@@ -143,8 +185,6 @@ def send_post(app):
 🌡️ {temp}°C
 🌬️ {wind} m/s
 ☁️ {desc}
-
-🏄 Smart recommendation active
 """
 
         await app.bot.send_message(chat_id=CHANNEL_ID, text=message)
@@ -157,19 +197,18 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
-    # COMMANDS
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("weather", weather))
+    app.add_handler(CommandHandler("activities", activities))
     app.add_handler(CommandHandler("bestspot", bestspot))
 
-    # SCHEDULER
     scheduler = BackgroundScheduler()
-    scheduler.add_job(send_post, "cron", hour=8, minute=0, args=[app])
+    scheduler.add_job(send_post, "cron", hour=7, minute=0, args=[app])
     scheduler.add_job(send_post, "cron", hour=10, minute=0, args=[app])
     scheduler.add_job(send_post, "cron", hour=14, minute=0, args=[app])
     scheduler.start()
 
-    print("🚀 IslandX Smart Bot running...")
+    print("🚀 Bot running...")
     app.run_polling()
 
 
