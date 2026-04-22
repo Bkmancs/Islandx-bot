@@ -183,20 +183,55 @@ async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = normalize_text(update.message.text)
 
-    if text in ZONE_MAPPING:
-        zone_key = ZONE_MAPPING[text]
+    # Primero intentamos detectar "clima en <zona>"
+    zone_key = None
+    if "clima en " in text:
+        for zone_name, key in ZONE_MAPPING.items():
+            if zone_name in text:
+                zone_key = key
+                break
+    else:
+        # Revisar si el mensaje es solo el nombre de la zona
+        for zone_name, key in ZONE_MAPPING.items():
+            if zone_name == text:
+                zone_key = key
+                break
+
+    # Si encontramos zona
+    if zone_key:
         info = get_zone_info(zone_key)
         if info:
-            msg = f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {round(info['wind']*3.6,1)} km/h\n☁️ {info['desc']}\n👉 {get_activity(info)}"
+            msg = (
+                f"📍 {info['zone']}\n"
+                f"🌡️ {info['temp']}°C\n"
+                f"🌬️ {round(info['wind']*3.6,1)} km/h\n"
+                f"☁️ {info['desc']}\n"
+                f"👉 {get_activity(info)}"
+            )
             await update.message.reply_text(msg)
+            return
         else:
             await update.message.reply_text("❌ No hay datos disponibles para esta zona.")
-    elif "ranking" in text:
+            return
+
+    # Ranking
+    if "ranking" in text:
         await update.message.reply_text(get_ranking())
-    elif "actividad" in text or "actividades" in text:
+        return
+
+    # Actividades
+    if any(word in text for word in ["actividad", "actividades", "activities"]):
         await update.message.reply_text(get_activities())
-    else:
-        await update.message.reply_text("🤖 No entendí tu mensaje. Prueba: clima en <zona>, ranking, actividades, bestspot")
+        return
+
+    # Si no entendemos
+    await update.message.reply_text(
+        "🤖 No entendí tu mensaje. Prueba:\n"
+        "- Clima en <zona> (ej. 'clima en los cristianos')\n"
+        "- Ranking\n"
+        "- Actividades\n"
+        "- Mejor spot ahora /bestspot"
+    )
 
 # 📡 AUTO-POST
 async def send_post(app):
