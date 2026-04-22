@@ -219,5 +219,36 @@ async def bestspot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if score > best_score:
             best_score = score
             best = info
-    if not best:
+    if best:
+        msg = f"🔥 Mejor spot ahora:\n📍 {best['zone']}\n🌡️ {best['temp']}°C\n🌬️ {best['wind']} km/h\n🌊 {best['wave']} m\n👉 {get_activity(best)}"
+        await update.message.reply_text(msg)
+    else:
         await update.message.reply_text("No hay datos disponibles")
+
+# 📡 AUTO-POST
+async def send_post(app):
+    message = "🌴 IslandX Update\n\n"
+    for z in ZONES:
+        info = get_zone_info(z)
+        if info:
+            message += f"📍 {info['zone']}\n🌡️ {info['temp']}°C\n🌬️ {info['wind']} km/h\n🌊 {info['wave']} m\n👉 {get_activity(info)}\n\n"
+    await app.bot.send_message(chat_id=CHANNEL_ID, text=message)
+
+# 🔧 MAIN
+def main():
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("bestspot", bestspot))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Scheduler
+    scheduler = BackgroundScheduler()
+    for h in [7,10,14,17]:
+        scheduler.add_job(lambda: asyncio.run(send_post(app)), "cron", hour=h, minute=0)
+    scheduler.start()
+
+    print("🚀 Bot running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
