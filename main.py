@@ -177,7 +177,6 @@ def mostrar_areas():
                         f"🌡️ Temp: {info['temp']}°C\n"
                         f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
                         f"☁️ Nubes: {info['nubes']}%\n"
-                        f"👉 Recomendado: {info['actividad']}\n\n")
     return mensaje
 
 # 🚀 COMANDOS
