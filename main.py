@@ -14,7 +14,7 @@ from pytz import timezone
 # 🔑 CONFIGURACIÓN
 TOKEN = os.environ.get("TOKEN")
 WEATHER_API_KEY = "5102dbcdeb96dddb822639d35fa993c4"
-CANAL_ID = "@IslandXTenerife"  # El bot debe ser admin
+CANAL_ID = "@IslandXTenerife"
 
 # 🌐 KEEP ALIVE
 app_web = Flask(__name__)
@@ -48,7 +48,7 @@ USUARIOS = cargar_usuarios()
 ZONAS = {
     "medano": {"lat": 28.0467, "lon": -16.5366, "nombre": "El Médano 🌬️"},
     "palm_mar": {"lat": 28.0065, "lon": -16.6805, "nombre": "Palm-Mar 🏝️"},
-    # "los_cristianos": {"lat": 28.0525, "lon": -16.7160, "nombre": "Los Cristianos 🌊"},  # Permitido consultar pero no ranking
+    "los_cristianos": {"lat": 28.0525, "lon": -16.7160, "nombre": "Los Cristianos 🌊"},
     "las_americas": {"lat": 28.0619, "lon": -16.7300, "nombre": "Las Américas 🏄"},
     "adeje": {"lat": 28.1210, "lon": -16.7260, "nombre": "Costa Adeje 🪂"},
     "teide": {"lat": 28.2724, "lon": -16.6425, "nombre": "Teide 🏔️"}
@@ -133,16 +133,14 @@ def ranking_climas():
     ranking = []
     for z in ZONAS:
         if z == "los_cristianos":
-            continue  # No aparece en ranking
+            continue  # no aparece en ranking
         info = info_zona(z)
         if info:
-            score = info["viento"]
-            ranking.append({"info": info, "score": score})
-    ranking.sort(key=lambda x: x["score"], reverse=True)
-    mejor = ranking[0]["info"] if ranking else None
+            ranking.append(info)
+    ranking.sort(key=lambda x: x["viento"], reverse=True)
+    mejor = ranking[0] if ranking else None
     mensaje = "📊 Ranking condiciones:\n\n"
-    for i, r in enumerate(ranking, 1):
-        info = r["info"]
+    for i, info in enumerate(ranking, 1):
         mensaje += (f"{i}. {info['zona']}\n"
                     f"   🌡️ Temp: {info['temp']}°C\n"
                     f"   🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
@@ -187,32 +185,55 @@ async def mejor_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 💬 MENSAJES
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = normalizar_texto(update.message.text)
-    if texto in ZONAS_MAPPING:
-        key = ZONAS_MAPPING[texto]
-        info = info_zona(key)
-        if info:
-            msg = (f"📍 {info['zona']}\n"
-                   f"🌡️ Temp: {info['temp']}°C\n"
-                   f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
-                   f"☁️ Nubes: {info['nubes']}%\n"
-                   f"👉 {actividad_recomendada(info)}")
-            await update.message.reply_text(msg)
-            return
-    elif texto in ["ranking"]:
+
+    # Detectar saludo
+    if any(s in texto for s in SALUDOS):
+        await update.message.reply_text(
+            f"👋 {update.message.text.capitalize()}!\n"
+            "📍 Puedes pedirme:\n"
+            "- Clima en una zona: ej. 'El Médano'\n"
+            "- Ranking de condiciones: escribe 'ranking'\n"
+            "- Mejor spot ahora: /bestspot\n"
+            "Pronto tendré nuevas funciones."
+        )
+        return
+
+    # Detectar palabra clave de zona
+    for key, zona_key in ZONAS_MAPPING.items():
+        if key in texto:
+            info = info_zona(zona_key)
+            if info:
+                msg = (f"📍 {info['zona']}\n"
+                       f"🌡️ Temp: {info['temp']}°C\n"
+                       f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
+                       f"☁️ Nubes: {info['nubes']}%\n"
+                       f"👉 {actividad_recomendada(info)}")
+                await update.message.reply_text(msg)
+                return
+
+    # Detectar ranking
+    if "ranking" in texto:
         await update.message.reply_text(ranking_climas())
         return
-    elif texto in SALUDOS:
-        await update.message.reply_text(f"👋 {update.message.text.capitalize()}!\n"
-                                        "🤖 No entendí tu mensaje. Prueba: clima en <zona>, ranking, /bestspot\n"
-                                        "Aún estoy en desarrollo o pronto tendré nuevas funciones.")
-        return
-    # Mensaje genérico de error
-    await update.message.reply_text("🤖 No entendí tu mensaje. Prueba: clima en <zona>, ranking, /bestspot\n"
-                                    "Aún estoy en desarrollo o pronto tendré nuevas funciones.")
 
-# 📡 AUTO-POST
+    # Detectar bestspot como palabra
+    if "bestspot" in texto:
+        await mejor_spot(update, context)
+        return
+
+    # Mensaje de error genérico
+    await update.message.reply_text(
+        "🤖 No entendí tu mensaje.\n"
+        "📍 Puedes pedirme:\n"
+        "- Clima en una zona: ej. 'El Médano'\n"
+        "- Ranking de condiciones: escribe 'ranking'\n"
+        "- Mejor spot ahora: /bestspot\n"
+        "Pronto tendré nuevas funciones."
+    )
+
+# 📡 AUTO-POST AL CANAL
 async def enviar_post(app):
-    mensaje = "🌴 IslandX Update\n\n"
+    mensaje = "🌴 ISLANDXPERIENCES TENERIFE\n\n"
     for z in ZONAS:
         info = info_zona(z)
         if info:
@@ -228,7 +249,6 @@ def programar_posts(app):
     tz_canarias = timezone("Atlantic/Canary")
     scheduler = BackgroundScheduler(timezone=tz_canarias)
     scheduler.add_job(actualizar_cache, "interval", minutes=10)
-
     for h in [7, 10, 14, 17]:
         scheduler.add_job(lambda: asyncio.run_coroutine_threadsafe(enviar_post(app), app.loop),
                           "cron", hour=h, minute=0)
@@ -241,9 +261,7 @@ def main():
     app.add_handler(CommandHandler("start", iniciar))
     app.add_handler(CommandHandler("bestspot", mejor_spot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
-
     programar_posts(app)
-
     print("🚀 Bot corriendo...")
     app.run_polling()
 
