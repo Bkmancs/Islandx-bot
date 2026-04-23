@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
 from pytz import timezone
+import random
 
 # 🔑 CONFIGURACIÓN
 TOKEN = os.environ.get("TOKEN")
@@ -51,7 +52,15 @@ ZONAS = {
     "los_cristianos": {"lat": 28.0525, "lon": -16.7160, "nombre": "Los Cristianos 🌊"},
     "las_americas": {"lat": 28.0619, "lon": -16.7300, "nombre": "Las Américas 🏄"},
     "adeje": {"lat": 28.1210, "lon": -16.7260, "nombre": "Costa Adeje 🪂"},
-    "teide": {"lat": 28.2724, "lon": -16.6425, "nombre": "Teide 🏔️"}
+    "teide": {"lat": 28.2724, "lon": -16.6425, "nombre": "Teide 🏔️"},
+    "teresitas": {"lat": 28.5146, "lon": -16.2316, "nombre": "Playa de Las Teresitas 🌴"},
+    "bajamar": {"lat": 28.5148, "lon": -16.2100, "nombre": "Bajamar 🌊"},
+    "taganana": {"lat": 28.6439, "lon": -16.2458, "nombre": "Taganana 🏞️"},
+    "laguna": {"lat": 28.4833, "lon": -16.3167, "nombre": "La Laguna 🏰"},
+    "masca": {"lat": 28.3921, "lon": -16.8400, "nombre": "Masca 🏔️"},
+    "puerto_colon": {"lat": 28.0648, "lon": -16.7438, "nombre": "Puerto Colón ⛵"},
+    "callao_salvaje": {"lat": 28.0667, "lon": -16.7770, "nombre": "Callao Salvaje 🏖️"},
+    "los_gigantes": {"lat": 28.2482, "lon": -16.8402, "nombre": "Los Gigantes 🏞️"}
 }
 
 # 🧠 NORMALIZACIÓN DE TEXTO
@@ -65,7 +74,28 @@ ZONAS_MAPPING = {
     "las américas": "las_americas",
     "americas": "las_americas",
     "adeje": "adeje",
-    "teide": "teide"
+    "teide": "teide",
+    "teresitas": "teresitas",
+    "playa teresitas": "teresitas",
+    "bajamar": "bajamar",
+    "taganana": "taganana",
+    "la laguna": "laguna",
+    "laguna": "laguna",
+    "masca": "masca",
+    "puerto colon": "puerto_colon",
+    "callao salvaje": "callao_salvaje",
+    "los gigantes": "los_gigantes",
+    "gigantes": "los_gigantes"
+}
+
+# ÁREAS RECREATIVAS
+AREAS_RECREATIVAS = {
+    "las_lajas": "Las Lajas",
+    "arenas_negras": "Arenas Negras",
+    "bosque_anaga": "Bosque de Anaga",
+    "masca": "Masca",
+    "puerto_colon": "Puerto Colón",
+    "los_gigantes": "Los Gigantes"
 }
 
 SALUDOS = ["hola", "buenos días", "buenos dias", "buenas tardes", "buenas noches"]
@@ -113,7 +143,7 @@ def info_zona(zona_key):
         "desc": desc
     }
 
-# 🏄 RECOMENDACIÓN DE DEPORTE
+# 🏄 ACTIVIDAD RECOMENDADA
 def actividad_recomendada(info):
     viento_kmh = info["viento"] * 3.6
     z = info["zona_key"]
@@ -128,17 +158,15 @@ def actividad_recomendada(info):
     else:
         return "🏝️ Mar tranquilo"
 
-# 📊 RANKING
+# 📊 RANKING (6 locaciones)
 def ranking_climas():
-    ranking = []
-    for z in ZONAS:
-        if z == "los_cristianos":
-            continue  # no aparece en ranking
-        info = info_zona(z)
+    ranking = [info_zona("palm_mar"), info_zona("teide")]
+    otras = [z for z in ZONAS if z not in ["palm_mar","teide"]]
+    random.shuffle(otras)
+    while len(ranking) < 6 and otras:
+        info = info_zona(otras.pop())
         if info:
             ranking.append(info)
-    ranking.sort(key=lambda x: x["viento"], reverse=True)
-    mejor = ranking[0] if ranking else None
     mensaje = "📊 Ranking condiciones:\n\n"
     for i, info in enumerate(ranking, 1):
         mensaje += (f"{i}. {info['zona']}\n"
@@ -146,8 +174,16 @@ def ranking_climas():
                     f"   🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
                     f"   ☁️ Nubes: {info['nubes']}%\n"
                     f"   👉 Recomendado: {actividad_recomendada(info)}\n\n")
-    if mejor:
+    if ranking:
+        mejor = ranking[0]
         mensaje += f"🔥 Mejor spot actualmente: {mejor['zona']}!\n"
+    return mensaje
+
+# ÁREAS RECREATIVAS
+def listar_areas():
+    mensaje = "🏞️ Áreas recreativas recomendadas:\n\n"
+    for area in AREAS_RECREATIVAS.values():
+        mensaje += f"- {area}\n"
     return mensaje
 
 # 🚀 COMANDOS
@@ -157,7 +193,8 @@ async def iniciar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📍 Puedes pedirme:\n"
         "- Clima en una zona: ej. 'El Médano'\n"
         "- Ranking de condiciones: escribe 'ranking'\n"
-        "- Mejor spot ahora: /bestspot\n\n"
+        "- Mejor spot ahora: /bestspot\n"
+        "- Áreas recreativas: /areas\n\n"
         "No olvides reservar tu excursión en www.islandxperience.com\n"
         "Te deseamos una feliz estadía."
     )
@@ -182,11 +219,13 @@ async def mejor_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("No hay datos disponibles.")
 
+async def areas_recreativas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(listar_areas())
+
 # 💬 MENSAJES
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = normalizar_texto(update.message.text)
 
-    # Detectar saludo
     if any(s in texto for s in SALUDOS):
         await update.message.reply_text(
             f"👋 {update.message.text.capitalize()}!\n"
@@ -194,11 +233,11 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "- Clima en una zona: ej. 'El Médano'\n"
             "- Ranking de condiciones: escribe 'ranking'\n"
             "- Mejor spot ahora: /bestspot\n"
+            "- Áreas recreativas: /areas\n"
             "Pronto tendré nuevas funciones."
         )
         return
 
-    # Detectar palabra clave de zona
     for key, zona_key in ZONAS_MAPPING.items():
         if key in texto:
             info = info_zona(zona_key)
@@ -211,23 +250,25 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(msg)
                 return
 
-    # Detectar ranking
     if "ranking" in texto:
         await update.message.reply_text(ranking_climas())
         return
 
-    # Detectar bestspot como palabra
     if "bestspot" in texto:
         await mejor_spot(update, context)
         return
 
-    # Mensaje de error genérico
+    if "areas" in texto:
+        await areas_recreativas(update, context)
+        return
+
     await update.message.reply_text(
         "🤖 No entendí tu mensaje.\n"
         "📍 Puedes pedirme:\n"
         "- Clima en una zona: ej. 'El Médano'\n"
         "- Ranking de condiciones: escribe 'ranking'\n"
         "- Mejor spot ahora: /bestspot\n"
+        "- Áreas recreativas: /areas\n"
         "Pronto tendré nuevas funciones."
     )
 
@@ -260,6 +301,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", iniciar))
     app.add_handler(CommandHandler("bestspot", mejor_spot))
+    app.add_handler(CommandHandler("areas", areas_recreativas))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
     programar_posts(app)
     print("🚀 Bot corriendo...")
