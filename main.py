@@ -133,35 +133,48 @@ def calcular_puntaje(info):
     viento_kmh = info["viento"] * 3.6
     temp = info["temp"]
     nubes = info["nubes"]
-    if 10 <= viento_kmh <= 25: puntaje += 5
-    elif 5 <= viento_kmh < 10 or 25 < viento_kmh <= 30: puntaje += 3
-    if 18 <= temp <= 28: puntaje += 5
-    elif 15 <= temp < 18 or 28 < temp <= 30: puntaje += 3
-    if nubes <= 30: puntaje += 5
-    elif nubes <= 60: puntaje += 3
+
+    # viento ideal: 10-25 km/h
+    if 10 <= viento_kmh <= 25:
+        puntaje += 5
+    elif 5 <= viento_kmh < 10 or 25 < viento_kmh <= 30:
+        puntaje += 3
+
+    # temperatura agradable: 18-28°C
+    if 18 <= temp <= 28:
+        puntaje += 5
+    elif 15 <= temp < 18 or 28 < temp <= 30:
+        puntaje += 3
+
+    # menos nubes mejor
+    if nubes <= 30:
+        puntaje += 5
+    elif nubes <= 60:
+        puntaje += 3
     return puntaje
 
 def ranking_climas():
-    # Ranking fijo 6 locaciones, siempre Palm-Mar y Teide
     ranking = [ZONAS["palm_mar"], ZONAS["teide"]]
-    otras = [z for k,z in ZONAS.items() if k not in ["palm_mar","teide"]]
+    otras = [z for k,z in ZONAS.items() if k not in ["palm_mar", "teide"]]
     ranking += random.sample(otras, min(4, len(otras)))
+
     ranking_info = []
     for z in ranking:
-        zona_key = [k for k,v in ZONAS.items() if v==z][0]
-        info = info_zona(zona_key)
+        key = [k for k,v in ZONAS.items() if v==z][0]
+        info = info_zona(key)
         if info:
             info["puntaje"] = calcular_puntaje(info)
-            info["actividad"] = actividad_recomendada(info)
             ranking_info.append(info)
+
     mejor = max(ranking_info, key=lambda x: x["puntaje"]) if ranking_info else None
+
     mensaje = "📊 Ranking condiciones:\n\n"
     for i, info in enumerate(ranking_info, 1):
         mensaje += (f"{i}. {info['zona']}\n"
                     f"   🌡️ Temp: {info['temp']}°C\n"
                     f"   🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
                     f"   ☁️ Nubes: {info['nubes']}%\n"
-                    f"   👉 Recomendado: {info['actividad']}\n\n")
+                    f"   👉 Recomendado: {actividad_recomendada(info)}\n\n")
     if mejor:
         mensaje += f"🔥 Mejor spot actualmente según puntaje: {mejor['zona']}!\n"
     return mensaje
@@ -172,11 +185,10 @@ def mostrar_areas():
     for z in AREAS_RECREATIVAS:
         info = info_zona(z)
         if info:
-            info["actividad"] = actividad_recomendada(info)
             mensaje += (f"📍 {info['zona']}\n"
                         f"🌡️ Temp: {info['temp']}°C\n"
                         f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
-                        f"☁️ Nubes: {info['nubes']}%\n"
+                        f"☁️ Nubes: {info['nubes']}%\n\n")
     return mensaje
 
 # 🚀 COMANDOS
@@ -197,7 +209,6 @@ async def mejor_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ranking_info = [info_zona(z) for z in ZONAS if info_zona(z)]
     for info in ranking_info:
         info["puntaje"] = calcular_puntaje(info)
-        info["actividad"] = actividad_recomendada(info)
     mejor = max(ranking_info, key=lambda x: x["puntaje"]) if ranking_info else None
     if mejor:
         msg = (f"🔥 Mejor spot ahora según puntaje:\n"
@@ -205,7 +216,7 @@ async def mejor_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"🌡️ Temp: {mejor['temp']}°C\n"
                f"🌬️ Viento: {round(mejor['viento']*3.6,1)} km/h\n"
                f"☁️ Nubes: {mejor['nubes']}%\n"
-               f"👉 Recomendado: {mejor['actividad']}")
+               f"👉 Recomendado: {actividad_recomendada(mejor)}")
         await update.message.reply_text(msg)
     else:
         await update.message.reply_text("No hay datos disponibles.")
@@ -216,6 +227,7 @@ async def areas_recreativas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 💬 MENSAJES
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = normalizar_texto(update.message.text)
+
     if any(s in texto for s in SALUDOS):
         await update.message.reply_text(
             f"👋 {update.message.text.capitalize()}!\n"
@@ -227,27 +239,31 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Pronto tendré nuevas funciones."
         )
         return
+
     for key, zona_key in ZONAS_MAPPING.items():
         if key in texto:
             info = info_zona(zona_key)
             if info:
-                info["actividad"] = actividad_recomendada(info)
                 msg = (f"📍 {info['zona']}\n"
                        f"🌡️ Temp: {info['temp']}°C\n"
                        f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
                        f"☁️ Nubes: {info['nubes']}%\n"
-                       f"👉 Recomendado: {info['actividad']}")
+                       f"👉 Recomendado: {actividad_recomendada(info)}")
                 await update.message.reply_text(msg)
                 return
+
     if "ranking" in texto:
         await update.message.reply_text(ranking_climas())
         return
+
     if "bestspot" in texto:
         await mejor_spot(update, context)
         return
+
     if "area" in texto or "recreativa" in texto:
         await areas_recreativas(update, context)
         return
+
     await update.message.reply_text(
         "🤖 No entendí tu mensaje.\n"
         "📍 Puedes pedirme:\n"
@@ -272,12 +288,11 @@ async def enviar_post(app):
     mensaje = "🌴 ISLANDXPERIENCES TENERIFE\n\n"
     ranking_info = [info_zona(z) for z in ZONAS if info_zona(z)]
     for info in ranking_info:
-        info["actividad"] = actividad_recomendada(info)
         mensaje += (f"📍 {info['zona']}\n"
                     f"🌡️ Temp: {info['temp']}°C\n"
                     f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
                     f"☁️ Nubes: {info['nubes']}%\n"
-                    f"👉 Recomendado: {info['actividad']}\n\n")
+                    f"👉 Recomendado: {actividad_recomendada(info)}\n\n")
     await app.bot.send_message(chat_id=CANAL_ID, text=mensaje)
 
 # 🔧 MAIN
