@@ -111,7 +111,7 @@ def actualizar_cache():
             url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric&lang=es"
             datos = requests.get(url, timeout=5).json()
             nueva_cache[z] = datos
-            time.sleep(0.1)  # evita exceder rate limit
+            time.sleep(0.1)
         except Exception as e:
             print(f"Error obteniendo {z}: {e}")
     CACHE_CLIMA = nueva_cache
@@ -155,17 +155,14 @@ def calcular_puntaje(info):
     viento_kmh = info["viento"] * 3.6
     temp = info["temp"]
     nubes = info["nubes"]
-    # viento ideal: 10-25 km/h
     if 10 <= viento_kmh <= 25:
         puntaje += 5
     elif 5 <= viento_kmh < 10 or 25 < viento_kmh <= 30:
         puntaje += 3
-    # temperatura agradable: 18-28°C
     if 18 <= temp <= 28:
         puntaje += 5
     elif 15 <= temp < 18 or 28 < temp <= 30:
         puntaje += 3
-    # menos nubes mejor
     if nubes <= 30:
         puntaje += 5
     elif nubes <= 60:
@@ -175,14 +172,12 @@ def calcular_puntaje(info):
 # 🏆 RANKING CLIMAS
 def ranking_climas():
     ranking = []
-    # Siempre incluir Palm-Mar
     info = info_zona("palm_mar")
     if info:
         info["puntaje"] = calcular_puntaje(info)
         info["deporte"] = actividad_recomendada(info)
         ranking.append(info)
 
-    # Selección de 5 zonas restantes (solo costeras/relevantes)
     otras = [k for k in ZONAS if k != "palm_mar"]
     ranking_otros = []
     for z in otras:
@@ -192,7 +187,6 @@ def ranking_climas():
             info["deporte"] = actividad_recomendada(info)
             ranking_otros.append(info)
 
-    # Orden por viento y aleatorización para valores iguales
     ranking_otros.sort(key=lambda x: x["viento"], reverse=True)
     final = []
     i = 0
@@ -203,7 +197,7 @@ def ranking_climas():
             same_wind.append(ranking_otros[j])
             j += 1
         random.shuffle(same_wind)
-        final.append(same_wind[0])  # solo uno de los valores iguales
+        final.append(same_wind[0])
         i = j
 
     ranking.extend(final[:5])
@@ -274,7 +268,6 @@ async def mejor_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = normalizar_texto(update.message.text)
 
-    # Saludos
     if any(s in texto for s in SALUDOS):
         await update.message.reply_text(
             f"👋 {update.message.text.capitalize()}!\n"
@@ -286,7 +279,6 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Zonas
     for key, zona_key in ZONAS_MAPPING.items():
         if key in texto:
             info = info_zona(zona_key)
@@ -298,17 +290,14 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(msg)
                 return
 
-    # Ranking
     if "ranking" in texto:
         await update.message.reply_text(ranking_climas())
         return
 
-    # Bestspot
     if "bestspot" in texto:
         await mejor_spot(update, context)
         return
 
-    # Áreas recreativas
     if "areas" in texto or "áreas" in texto:
         await areas_recreativas(update, context)
         return
@@ -322,21 +311,25 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- Áreas recreativas: /areas"
     )
 
+# 🔧 ENVÍO AUTOMÁTICO
+async def enviar_post(app):
+    mensaje = ranking_climas()
+    try:
+        await app.bot.send_message(chat_id=CANAL_ID, text=mensaje)
+        print(f"📤 Mensaje enviado al canal {CANAL_ID}")
+    except Exception as e:
+        print(f"❌ Error al enviar mensaje: {e}")
+
 # 🔧 SCHEDULER
 def programar_posts(app):
     tz_canarias = timezone("Atlantic/Canary")
     scheduler = BackgroundScheduler(timezone=tz_canarias)
-    
-    # Actualizar cache cada 10 minutos
     scheduler.add_job(actualizar_cache, "interval", minutes=10)
 
-    # Horas de envío al canal
     horas_envio = [7, 10, 14, 17, 20, 21]
     for h in horas_envio:
-        # Usamos run_coroutine_threadsafe para correr la función asíncrona desde el scheduler
         scheduler.add_job(lambda h=h: asyncio.run_coroutine_threadsafe(enviar_post(app), app.loop),
                           "cron", hour=h, minute=0)
-    
     scheduler.start()
 
 # 🔧 MAIN
