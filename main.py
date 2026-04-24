@@ -326,7 +326,17 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def programar_posts(app):
     tz_canarias = timezone("Atlantic/Canary")
     scheduler = BackgroundScheduler(timezone=tz_canarias)
+    
+    # Actualizar cache cada 10 minutos
     scheduler.add_job(actualizar_cache, "interval", minutes=10)
+
+    # Horas de envío al canal
+    horas_envio = [7, 10, 14, 17, 20, 21]
+    for h in horas_envio:
+        # Usamos run_coroutine_threadsafe para correr la función asíncrona desde el scheduler
+        scheduler.add_job(lambda h=h: asyncio.run_coroutine_threadsafe(enviar_post(app), app.loop),
+                          "cron", hour=h, minute=0)
+    
     scheduler.start()
 
 # 🔧 MAIN
