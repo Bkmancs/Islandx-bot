@@ -9,6 +9,7 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.executors.pool import ThreadPoolExecutor
 import asyncio
 from pytz import timezone
 
@@ -19,33 +20,12 @@ CANAL_ID = "@IslandXTenerife"
 
 # 🌐 KEEP ALIVE
 app_web = Flask(__name__)
-
 @app_web.route('/')
 def home():
     return "Bot activo"
+threading.Thread(target=lambda: app_web.run(host='0.0.0.0', port=10000)).start()
 
-def run_web():
-    app_web.run(host='0.0.0.0', port=10000)
-
-threading.Thread(target=run_web).start()
-
-# 💾 MEMORIA JSON
-USUARIOS_FILE = "usuarios.json"
-
-def cargar_usuarios():
-    try:
-        with open(USUARIOS_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def guardar_usuarios(datos):
-    with open(USUARIOS_FILE, "w") as f:
-        json.dump(datos, f)
-
-USUARIOS = cargar_usuarios()
-
-# 🌍 ZONAS DE INTERÉS PARA RANKING
+# 🌍 ZONAS Y ÁREAS
 ZONAS = {
     "medano": {"lat": 28.0467, "lon": -16.5366, "nombre": "El Médano 🌬️"},
     "palm_mar": {"lat": 28.0065, "lon": -16.6805, "nombre": "Palm-Mar 🏝️"},
@@ -62,7 +42,6 @@ ZONAS = {
     "tabaiba": {"lat": 28.471, "lon": -16.248, "nombre": "Tabaiba 🌴"}
 }
 
-# ZONAS RECREATIVAS (solo clima)
 AREAS_RECREATIVAS = {
     "las_lajas": {"lat": 28.057, "lon": -16.638, "nombre": "Las Lajas 🌳"},
     "arenas_negras": {"lat": 28.05, "lon": -16.63, "nombre": "Arenas Negras 🌲"},
@@ -73,47 +52,43 @@ AREAS_RECREATIVAS = {
 # Normalización de texto
 ZONAS_MAPPING = {k: k for k in ZONAS.keys()}
 ZONAS_MAPPING.update({
-    "el medano": "medano",
-    "palm mar": "palm_mar",
-    "palm-mar": "palm_mar",
-    "los cristianos": "los_cristianos",
-    "las americas": "las_americas",
-    "las américas": "las_americas",
-    "americas": "las_americas",
-    "puerto colon": "puerto_colon",
-    "callao salvaje": "callao_salvaje",
-    "los gigantes": "los_gigantes",
-    "playa teresitas": "teresitas",
-    "bajamar": "bajamar",
-    "taganana": "taganana",
-    "tabaiba": "tabaiba"
+    "el medano": "medano", "palm mar": "palm_mar", "palm-mar": "palm_mar",
+    "los cristianos": "los_cristianos", "las americas": "las_americas",
+    "las américas": "las_americas", "americas": "las_americas",
+    "puerto colon": "puerto_colon", "callao salvaje": "callao_salvaje",
+    "los gigantes": "los_gigantes", "playa teresitas": "teresitas",
+    "bajamar": "bajamar", "taganana": "taganana", "tabaiba": "tabaiba"
 })
-
 SALUDOS = ["hola", "buenos días", "buenos dias", "buenas tardes", "buenas noches"]
 
 def normalizar_texto(texto):
     texto = texto.lower().strip()
     texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
-    texto = texto.replace("-", " ").replace("_", " ")
-    return texto
+    return texto.replace("-", " ").replace("_", " ")
 
 # 🌤️ CACHE
 CACHE_CLIMA = {}
 ULTIMA_ACTUALIZACION = 0
 
-def actualizar_cache():
-    global CACHE_CLIMA, ULTIMA_ACTUALIZACION
-    nueva_cache = {}
-    for z in {**ZONAS, **AREAS_RECREATIVAS}:
+def obtener_clima(z, retries=3):
+    for intento in range(retries):
         try:
             lat = (ZONAS.get(z) or AREAS_RECREATIVAS.get(z))["lat"]
             lon = (ZONAS.get(z) or AREAS_RECREATIVAS.get(z))["lon"]
             url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric&lang=es"
             datos = requests.get(url, timeout=5).json()
+            return datos
+        except:
+            time.sleep(1)
+    return None
+
+def actualizar_cache():
+    global CACHE_CLIMA, ULTIMA_ACTUALIZACION
+    nueva_cache = {}
+    for z in {**ZONAS, **AREAS_RECREATIVAS}:
+        datos = obtener_clima(z)
+        if datos:
             nueva_cache[z] = datos
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"Error obteniendo {z}: {e}")
     CACHE_CLIMA = nueva_cache
     ULTIMA_ACTUALIZACION = time.time()
     print("🟢 Cache actualizada")
@@ -125,17 +100,15 @@ def info_zona(zona_key):
     temp = datos["main"]["temp"]
     viento = datos["wind"]["speed"]
     nubes = datos["clouds"]["all"]
-    desc = datos["weather"][0]["description"]
     return {
         "zona_key": zona_key,
         "zona": (ZONAS.get(zona_key) or AREAS_RECREATIVAS.get(zona_key))["nombre"],
         "temp": temp,
         "viento": viento,
         "nubes": nubes,
-        "desc": desc
+        "desc": datos["weather"][0]["description"]
     }
 
-# 🏄 Recomendación de deporte
 def actividad_recomendada(info):
     viento_kmh = info["viento"] * 3.6
     z = info["zona_key"]
@@ -155,21 +128,14 @@ def calcular_puntaje(info):
     viento_kmh = info["viento"] * 3.6
     temp = info["temp"]
     nubes = info["nubes"]
-    if 10 <= viento_kmh <= 25:
-        puntaje += 5
-    elif 5 <= viento_kmh < 10 or 25 < viento_kmh <= 30:
-        puntaje += 3
-    if 18 <= temp <= 28:
-        puntaje += 5
-    elif 15 <= temp < 18 or 28 < temp <= 30:
-        puntaje += 3
-    if nubes <= 30:
-        puntaje += 5
-    elif nubes <= 60:
-        puntaje += 3
+    if 10 <= viento_kmh <= 25: puntaje += 5
+    elif 5 <= viento_kmh < 10 or 25 < viento_kmh <= 30: puntaje += 3
+    if 18 <= temp <= 28: puntaje += 5
+    elif 15 <= temp < 18 or 28 < temp <= 30: puntaje += 3
+    if nubes <= 30: puntaje += 5
+    elif nubes <= 60: puntaje += 3
     return puntaje
 
-# 🏆 RANKING CLIMAS
 def ranking_climas():
     ranking = []
     info = info_zona("palm_mar")
@@ -177,7 +143,6 @@ def ranking_climas():
         info["puntaje"] = calcular_puntaje(info)
         info["deporte"] = actividad_recomendada(info)
         ranking.append(info)
-
     otras = [k for k in ZONAS if k != "palm_mar"]
     ranking_otros = []
     for z in otras:
@@ -186,7 +151,6 @@ def ranking_climas():
             info["puntaje"] = calcular_puntaje(info)
             info["deporte"] = actividad_recomendada(info)
             ranking_otros.append(info)
-
     ranking_otros.sort(key=lambda x: x["viento"], reverse=True)
     final = []
     i = 0
@@ -199,9 +163,7 @@ def ranking_climas():
         random.shuffle(same_wind)
         final.append(same_wind[0])
         i = j
-
     ranking.extend(final[:5])
-
     mensaje = "📊 Ranking condiciones:\n\n"
     for idx, info in enumerate(ranking, 1):
         mensaje += (f"{idx}. {info['zona']}\n"
@@ -214,21 +176,7 @@ def ranking_climas():
         mensaje += f"🔥 Mejor spot actualmente: {mejor['zona']}!\n"
     return mensaje
 
-# 🌿 ÁREAS RECREATIVAS
-async def areas_recreativas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mensaje = "🌿 Áreas recreativas de Tenerife:\n\n"
-    for key, val in AREAS_RECREATIVAS.items():
-        info = info_zona(key)
-        if info:
-            mensaje += (f"📍 {val['nombre']}\n"
-                        f"🌡️ Temp: {info['temp']}°C\n"
-                        f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
-                        f"☁️ Nubes: {info['nubes']}%\n\n")
-        else:
-            mensaje += f"📍 {val['nombre']}\n   No hay datos de clima.\n\n"
-    await update.message.reply_text(mensaje)
-
-# 🚀 COMANDOS
+# 🚀 COMANDOS Y MENSAJES
 async def iniciar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensaje = (
         "👋 ¡Bienvenido! Soy Calimabot, tu asistente del clima en Tenerife.\n\n"
@@ -264,10 +212,21 @@ async def mejor_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("No hay datos disponibles.")
 
-# 💬 MENSAJES
+async def areas_recreativas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mensaje = "🌿 Áreas recreativas de Tenerife:\n\n"
+    for key, val in AREAS_RECREATIVAS.items():
+        info = info_zona(key)
+        if info:
+            mensaje += (f"📍 {val['nombre']}\n"
+                        f"🌡️ Temp: {info['temp']}°C\n"
+                        f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
+                        f"☁️ Nubes: {info['nubes']}%\n\n")
+        else:
+            mensaje += f"📍 {val['nombre']}\n   No hay datos de clima.\n\n"
+    await update.message.reply_text(mensaje)
+
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = normalizar_texto(update.message.text)
-
     if any(s in texto for s in SALUDOS):
         await update.message.reply_text(
             f"👋 {update.message.text.capitalize()}!\n"
@@ -278,7 +237,6 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "- Áreas recreativas: /areas"
         )
         return
-
     for key, zona_key in ZONAS_MAPPING.items():
         if key in texto:
             info = info_zona(zona_key)
@@ -289,19 +247,15 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        f"☁️ Nubes: {info['nubes']}%")
                 await update.message.reply_text(msg)
                 return
-
     if "ranking" in texto:
         await update.message.reply_text(ranking_climas())
         return
-
     if "bestspot" in texto:
         await mejor_spot(update, context)
         return
-
     if "areas" in texto or "áreas" in texto:
         await areas_recreativas(update, context)
         return
-
     await update.message.reply_text(
         "🤖 No entendí tu mensaje.\n"
         "📍 Puedes pedirme:\n"
@@ -314,20 +268,22 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 🔧 ENVÍO AUTOMÁTICO
 async def enviar_post(app):
     mensaje = ranking_climas()
-    try:
-        await app.bot.send_message(chat_id=CANAL_ID, text=mensaje)
-        print(f"📤 Mensaje enviado al canal {CANAL_ID}")
-    except Exception as e:
-        print(f"❌ Error al enviar mensaje: {e}")
+    for intento in range(3):
+        try:
+            await app.bot.send_message(chat_id=CANAL_ID, text=mensaje)
+            print(f"📤 Mensaje enviado al canal {CANAL_ID}")
+            break
+        except Exception as e:
+            print(f"❌ Error al enviar mensaje: {e}, reintentando...")
+            await asyncio.sleep(2)
 
 # 🔧 SCHEDULER
 def programar_posts(app):
     tz_canarias = timezone("Atlantic/Canary")
-    scheduler = BackgroundScheduler(timezone=tz_canarias)
+    executors = {"default": ThreadPoolExecutor(10)}
+    scheduler = BackgroundScheduler(executors=executors, timezone=tz_canarias)
     scheduler.add_job(actualizar_cache, "interval", minutes=10)
-
-    horas_envio = [7, 10, 14, 17, 20, 21]
-    for h in horas_envio:
+    for h in [7,10,14,17,20,21]:
         scheduler.add_job(lambda h=h: asyncio.run_coroutine_threadsafe(enviar_post(app), app.loop),
                           "cron", hour=h, minute=0)
     scheduler.start()
