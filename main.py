@@ -4,13 +4,13 @@ import time
 import threading
 import requests
 import unicodedata
+import random
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
 from pytz import timezone
-import random
 
 # 🔑 CONFIGURACIÓN
 TOKEN = os.environ.get("TOKEN")
@@ -45,27 +45,49 @@ def guardar_usuarios(datos):
 
 USUARIOS = cargar_usuarios()
 
-# 🌍 ZONAS PRINCIPALES PARA EL RANKING
+# 🌍 ZONAS DE INTERÉS PARA RANKING
 ZONAS = {
     "medano": {"lat": 28.0467, "lon": -16.5366, "nombre": "El Médano 🌬️"},
     "palm_mar": {"lat": 28.0065, "lon": -16.6805, "nombre": "Palm-Mar 🏝️"},
+    "los_cristianos": {"lat": 28.0525, "lon": -16.7160, "nombre": "Los Cristianos 🌊"},
     "las_americas": {"lat": 28.0619, "lon": -16.7300, "nombre": "Las Américas 🏄"},
     "adeje": {"lat": 28.1210, "lon": -16.7260, "nombre": "Costa Adeje 🪂"},
     "teide": {"lat": 28.2724, "lon": -16.6425, "nombre": "Teide 🏔️"},
-    "las_lajas": {"lat": 28.3500, "lon": -16.4500, "nombre": "Las Lajas 🌳"},
-    "masca": {"lat": 28.3600, "lon": -16.8000, "nombre": "Masca 🏞️"},
+    "puerto_colon": {"lat": 28.061, "lon": -16.737, "nombre": "Puerto Colón ⚓"},
+    "callao_salvaje": {"lat": 28.064, "lon": -16.753, "nombre": "Callao Salvaje 🏖️"},
+    "los_gigantes": {"lat": 28.247, "lon": -16.854, "nombre": "Los Gigantes 🏞️"},
+    "teresitas": {"lat": 28.511, "lon": -16.226, "nombre": "Playa de Las Teresitas 🏖️"},
+    "bajamar": {"lat": 28.549, "lon": -16.286, "nombre": "Bajamar 🌊"},
+    "taganana": {"lat": 28.667, "lon": -16.331, "nombre": "Taganana 🏝️"},
+    "tabaiba": {"lat": 28.471, "lon": -16.248, "nombre": "Tabaiba 🌴"}
 }
 
-# 🌳 ÁREAS RECREATIVAS (sin afectar ranking)
+# ZONAS RECREATIVAS (solo clima)
 AREAS_RECREATIVAS = {
-    "las_lajas": {"lat": 28.3500, "lon": -16.4500, "nombre": "Las Lajas 🌳"},
-    "arenas_negras": {"lat": 28.2500, "lon": -16.7000, "nombre": "Arenas Negras 🏖️"},
-    "masca": {"lat": 28.3600, "lon": -16.8000, "nombre": "Masca 🏞️"},
+    "las_lajas": {"lat": 28.057, "lon": -16.638, "nombre": "Las Lajas 🌳"},
+    "arenas_negras": {"lat": 28.05, "lon": -16.63, "nombre": "Arenas Negras 🌲"},
+    "masca": {"lat": 28.352, "lon": -16.841, "nombre": "Masca 🌄"},
+    "anaga": {"lat": 28.526, "lon": -16.208, "nombre": "Bosque de Anaga 🌿"}
 }
 
-# 🧠 NORMALIZACIÓN DE TEXTO
-ZONAS_MAPPING = {key: key for key in ZONAS.keys()}
-AREAS_MAPPING = {key: key for key in AREAS_RECREATIVAS.keys()}
+# Normalización de texto
+ZONAS_MAPPING = {k: k for k in ZONAS.keys()}
+ZONAS_MAPPING.update({
+    "el medano": "medano",
+    "palm mar": "palm_mar",
+    "palm-mar": "palm_mar",
+    "los cristianos": "los_cristianos",
+    "las americas": "las_americas",
+    "las américas": "las_americas",
+    "americas": "las_americas",
+    "puerto colon": "puerto_colon",
+    "callao salvaje": "callao_salvaje",
+    "los gigantes": "los_gigantes",
+    "playa teresitas": "teresitas",
+    "bajamar": "bajamar",
+    "taganana": "taganana",
+    "tabaiba": "tabaiba"
+})
 
 SALUDOS = ["hola", "buenos días", "buenos dias", "buenas tardes", "buenas noches"]
 
@@ -89,6 +111,7 @@ def actualizar_cache():
             url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric&lang=es"
             datos = requests.get(url, timeout=5).json()
             nueva_cache[z] = datos
+            time.sleep(0.1)  # evita exceder rate limit
         except Exception as e:
             print(f"Error obteniendo {z}: {e}")
     CACHE_CLIMA = nueva_cache
@@ -112,7 +135,7 @@ def info_zona(zona_key):
         "desc": desc
     }
 
-# 🏄 RECOMENDACIÓN DE DEPORTE
+# 🏄 Recomendación de deporte
 def actividad_recomendada(info):
     viento_kmh = info["viento"] * 3.6
     z = info["zona_key"]
@@ -127,25 +150,21 @@ def actividad_recomendada(info):
     else:
         return "🏝️ Mar tranquilo"
 
-# 🏄 RANKING Y PUNTAJE COMBINADO
 def calcular_puntaje(info):
     puntaje = 0
     viento_kmh = info["viento"] * 3.6
     temp = info["temp"]
     nubes = info["nubes"]
-
     # viento ideal: 10-25 km/h
     if 10 <= viento_kmh <= 25:
         puntaje += 5
     elif 5 <= viento_kmh < 10 or 25 < viento_kmh <= 30:
         puntaje += 3
-
     # temperatura agradable: 18-28°C
     if 18 <= temp <= 28:
         puntaje += 5
     elif 15 <= temp < 18 or 28 < temp <= 30:
         puntaje += 3
-
     # menos nubes mejor
     if nubes <= 30:
         puntaje += 5
@@ -153,43 +172,67 @@ def calcular_puntaje(info):
         puntaje += 3
     return puntaje
 
+# 🏆 RANKING CLIMAS
 def ranking_climas():
-    ranking = [ZONAS["palm_mar"], ZONAS["teide"]]
-    otras = [z for k,z in ZONAS.items() if k not in ["palm_mar", "teide"]]
-    ranking += random.sample(otras, min(4, len(otras)))
+    ranking = []
+    # Siempre incluir Palm-Mar
+    info = info_zona("palm_mar")
+    if info:
+        info["puntaje"] = calcular_puntaje(info)
+        info["deporte"] = actividad_recomendada(info)
+        ranking.append(info)
 
-    ranking_info = []
-    for z in ranking:
-        key = [k for k,v in ZONAS.items() if v==z][0]
-        info = info_zona(key)
+    # Selección de 5 zonas restantes (solo costeras/relevantes)
+    otras = [k for k in ZONAS if k != "palm_mar"]
+    ranking_otros = []
+    for z in otras:
+        info = info_zona(z)
         if info:
             info["puntaje"] = calcular_puntaje(info)
-            ranking_info.append(info)
+            info["deporte"] = actividad_recomendada(info)
+            ranking_otros.append(info)
 
-    mejor = max(ranking_info, key=lambda x: x["puntaje"]) if ranking_info else None
+    # Orden por viento y aleatorización para valores iguales
+    ranking_otros.sort(key=lambda x: x["viento"], reverse=True)
+    final = []
+    i = 0
+    while i < len(ranking_otros) and len(final) < 5:
+        same_wind = [ranking_otros[i]]
+        j = i + 1
+        while j < len(ranking_otros) and ranking_otros[j]["viento"] == ranking_otros[i]["viento"]:
+            same_wind.append(ranking_otros[j])
+            j += 1
+        random.shuffle(same_wind)
+        final.append(same_wind[0])  # solo uno de los valores iguales
+        i = j
+
+    ranking.extend(final[:5])
 
     mensaje = "📊 Ranking condiciones:\n\n"
-    for i, info in enumerate(ranking_info, 1):
-        mensaje += (f"{i}. {info['zona']}\n"
+    for idx, info in enumerate(ranking, 1):
+        mensaje += (f"{idx}. {info['zona']}\n"
                     f"   🌡️ Temp: {info['temp']}°C\n"
                     f"   🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
                     f"   ☁️ Nubes: {info['nubes']}%\n"
-                    f"   👉 Recomendado: {actividad_recomendada(info)}\n\n")
+                    f"   👉 Recomendado: {info['deporte']}\n\n")
+    mejor = max(ranking, key=lambda x: x["puntaje"]) if ranking else None
     if mejor:
-        mensaje += f"🔥 Mejor spot actualmente según puntaje: {mejor['zona']}!\n"
+        mensaje += f"🔥 Mejor spot actualmente: {mejor['zona']}!\n"
     return mensaje
 
-# 🌳 ÁREAS RECREATIVAS
-def mostrar_areas():
-    mensaje = "🌳 Áreas recreativas:\n\n"
-    for z in AREAS_RECREATIVAS:
-        info = info_zona(z)
+# 🌿 ÁREAS RECREATIVAS
+async def areas_recreativas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mensaje = "🌿 Áreas recreativas de Tenerife:\n\n"
+    for key, val in AREAS_RECREATIVAS.items():
+        info = info_zona(key)
         if info:
-            mensaje += (f"📍 {info['zona']}\n"
+            mensaje += (f"📍 {val['nombre']}\n"
                         f"🌡️ Temp: {info['temp']}°C\n"
                         f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
                         f"☁️ Nubes: {info['nubes']}%\n\n")
-    return mensaje
+        else:
+            mensaje += f"📍 {val['nombre']}\n   No hay datos de clima.\n\n"
+    await update.message.reply_text(mensaje)
 
 # 🚀 COMANDOS
 async def iniciar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,28 +249,32 @@ async def iniciar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(mensaje)
 
 async def mejor_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ranking_info = [info_zona(z) for z in ZONAS if info_zona(z)]
-    for info in ranking_info:
-        info["puntaje"] = calcular_puntaje(info)
-    mejor = max(ranking_info, key=lambda x: x["puntaje"]) if ranking_info else None
+    mejor = None
+    max_puntaje = -1
+    for z in ZONAS:
+        info = info_zona(z)
+        if info:
+            puntaje = calcular_puntaje(info)
+            if puntaje > max_puntaje:
+                max_puntaje = puntaje
+                info["deporte"] = actividad_recomendada(info)
+                mejor = info
     if mejor:
-        msg = (f"🔥 Mejor spot ahora según puntaje:\n"
+        msg = (f"🔥 Mejor spot ahora:\n"
                f"📍 {mejor['zona']}\n"
                f"🌡️ Temp: {mejor['temp']}°C\n"
                f"🌬️ Viento: {round(mejor['viento']*3.6,1)} km/h\n"
                f"☁️ Nubes: {mejor['nubes']}%\n"
-               f"👉 Recomendado: {actividad_recomendada(mejor)}")
+               f"👉 Recomendado: {mejor['deporte']}")
         await update.message.reply_text(msg)
     else:
         await update.message.reply_text("No hay datos disponibles.")
-
-async def areas_recreativas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(mostrar_areas())
 
 # 💬 MENSAJES
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = normalizar_texto(update.message.text)
 
+    # Saludos
     if any(s in texto for s in SALUDOS):
         await update.message.reply_text(
             f"👋 {update.message.text.capitalize()}!\n"
@@ -235,11 +282,11 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "- Clima en una zona: ej. 'El Médano'\n"
             "- Ranking de condiciones: escribe 'ranking'\n"
             "- Mejor spot ahora: /bestspot\n"
-            "- Áreas recreativas: /areas\n"
-            "Pronto tendré nuevas funciones."
+            "- Áreas recreativas: /areas"
         )
         return
 
+    # Zonas
     for key, zona_key in ZONAS_MAPPING.items():
         if key in texto:
             info = info_zona(zona_key)
@@ -247,20 +294,22 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg = (f"📍 {info['zona']}\n"
                        f"🌡️ Temp: {info['temp']}°C\n"
                        f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
-                       f"☁️ Nubes: {info['nubes']}%\n"
-                       f"👉 Recomendado: {actividad_recomendada(info)}")
+                       f"☁️ Nubes: {info['nubes']}%")
                 await update.message.reply_text(msg)
                 return
 
+    # Ranking
     if "ranking" in texto:
         await update.message.reply_text(ranking_climas())
         return
 
+    # Bestspot
     if "bestspot" in texto:
         await mejor_spot(update, context)
         return
 
-    if "area" in texto or "recreativa" in texto:
+    # Áreas recreativas
+    if "areas" in texto or "áreas" in texto:
         await areas_recreativas(update, context)
         return
 
@@ -270,8 +319,7 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- Clima en una zona: ej. 'El Médano'\n"
         "- Ranking de condiciones: escribe 'ranking'\n"
         "- Mejor spot ahora: /bestspot\n"
-        "- Áreas recreativas: /areas\n"
-        "Pronto tendré nuevas funciones."
+        "- Áreas recreativas: /areas"
     )
 
 # 🔧 SCHEDULER
@@ -279,21 +327,7 @@ def programar_posts(app):
     tz_canarias = timezone("Atlantic/Canary")
     scheduler = BackgroundScheduler(timezone=tz_canarias)
     scheduler.add_job(actualizar_cache, "interval", minutes=10)
-    for h in [7, 10, 14, 17]:
-        scheduler.add_job(lambda: asyncio.run_coroutine_threadsafe(enviar_post(app), app.loop),
-                          "cron", hour=h, minute=0)
     scheduler.start()
-
-async def enviar_post(app):
-    mensaje = "🌴 ISLANDXPERIENCES TENERIFE\n\n"
-    ranking_info = [info_zona(z) for z in ZONAS if info_zona(z)]
-    for info in ranking_info:
-        mensaje += (f"📍 {info['zona']}\n"
-                    f"🌡️ Temp: {info['temp']}°C\n"
-                    f"🌬️ Viento: {round(info['viento']*3.6,1)} km/h\n"
-                    f"☁️ Nubes: {info['nubes']}%\n"
-                    f"👉 Recomendado: {actividad_recomendada(info)}\n\n")
-    await app.bot.send_message(chat_id=CANAL_ID, text=mensaje)
 
 # 🔧 MAIN
 def main():
